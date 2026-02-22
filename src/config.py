@@ -44,8 +44,8 @@ STRIDE = 5           # Window stride (5 for 500-well dataset)
 FORECAST_HORIZONS = list(range(30, 1830, 30))
 NUM_FORECAST_HORIZONS = 60
 
-# DataLoader workers (0 for local/MPS, 2 for multi-GPU)
-NUM_WORKERS = 2
+# DataLoader workers (0 for local/MPS, 4 for multi-GPU)
+NUM_WORKERS = 4
 
 # ---------------------------------------------------------------------------
 # Feature definitions  (column names from the generated CSV)
@@ -104,7 +104,7 @@ CNN_KERNEL = 3
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 32
+BATCH_SIZE = 256
 LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 1e-4
 EPOCHS = 100
