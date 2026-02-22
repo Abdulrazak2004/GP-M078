@@ -192,7 +192,7 @@ def train_experiment(name, exp_config, device, output_dir):
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min", patience=LR_REDUCE_PATIENCE,
-        factor=LR_REDUCE_FACTOR, verbose=False,
+        factor=LR_REDUCE_FACTOR,
     )
     criterion = MultiTaskLoss().to(device)
 
