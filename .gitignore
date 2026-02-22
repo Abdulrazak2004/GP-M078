@@ -1,0 +1,6 @@
+# Generated data (too large for GitHub)
+data/synthetic_corrosion_dataset.csv
+
+# Python cache
+__pycache__/
+*.pyc
