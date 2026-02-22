@@ -25,14 +25,13 @@ import torch
 
 
 # Estimated runtimes (minutes) for longest-first scheduling
+# 500 wells + 5-fold CV = ~5x longer per experiment
 EXPERIMENT_PRIORITY = OrderedDict([
-    ("exp6_bilstm_w60", 23),
-    ("exp3_bilstm_optA", 17),
-    ("exp4_cnnlstm_optA", 13),
-    ("exp5_bilstm_w15", 13),
-    ("exp2_lstm_optA", 10),
-    ("exp1_lstm_optB", 10),
-    ("timesfm", 5),
+    ("exp3_bilstm_optA", 120),
+    ("exp4_cnnlstm_optA", 90),
+    ("exp5_bilstm_w15", 90),
+    ("exp1_lstm_optB", 60),
+    ("timesfm", 10),
 ])
 
 

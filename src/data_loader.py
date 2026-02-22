@@ -16,7 +16,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 import joblib
 from tqdm import tqdm
 
@@ -27,7 +27,7 @@ from src.config import (
     TARGET_RUL, TARGET_CR, TARGET_WT, TARGET_CAUSE,
     FORECAST_HORIZONS, NUM_FORECAST_HORIZONS,
     TRAIN_RATIO, VAL_RATIO, TEST_RATIO,
-    BATCH_SIZE, NUM_WORKERS,
+    BATCH_SIZE, NUM_WORKERS, N_CV_FOLDS,
 )
 
 
@@ -111,16 +111,16 @@ def split_wells(df, train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
 # 3. SCALING
 # ============================================================================
 
-def fit_scaler(df_train, feature_cols):
+def fit_scaler(df_train, feature_cols, save=True):
     """Fit MinMaxScaler on training data only. Binary features are excluded."""
     cols_to_scale = [c for c in feature_cols if c not in BINARY_FEATURES]
     scaler = MinMaxScaler()
     scaler.fit(df_train[cols_to_scale].values)
 
-    # Save for inference
-    SCALER_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(scaler, SCALER_DIR / "feature_scaler.joblib")
-    joblib.dump(cols_to_scale, SCALER_DIR / "scaled_columns.joblib")
+    if save:
+        SCALER_DIR.mkdir(parents=True, exist_ok=True)
+        joblib.dump(scaler, SCALER_DIR / "feature_scaler.joblib")
+        joblib.dump(cols_to_scale, SCALER_DIR / "scaled_columns.joblib")
 
     return scaler, cols_to_scale
 
@@ -333,3 +333,116 @@ def prepare_data(feature_option="A", window_size=WINDOW_SIZE, batch_size=BATCH_S
         "scaler": scaler,
         "feature_cols": feature_cols,
     }
+
+
+# ============================================================================
+# 6. K-FOLD CROSS-VALIDATION SUPPORT
+# ============================================================================
+
+def split_wells_cv(df, n_folds=N_CV_FOLDS, test_ratio=TEST_RATIO,
+                   seed=RANDOM_SEED):
+    """
+    Split wells into held-out test set + K folds for cross-validation.
+
+    LEAKAGE PREVENTION:
+      - Test wells are separated FIRST and never used in any fold.
+      - Each fold's scaler is fitted ONLY on that fold's training wells.
+      - Splits are at the well level (no rows from same well in train+val).
+
+    Returns
+    -------
+    folds : list of dicts, each with 'train' and 'val' well ID lists
+    test_wells : list of well IDs for final evaluation
+    """
+    well_info = df.groupby("Well_ID").agg(
+        failed=("RUL_days", lambda x: int((x == 0).any())),
+        cause=("Corrosion_Cause", "first"),
+    ).reset_index()
+
+    # Stratification key: failure status + cause
+    strat_key = (
+        well_info["failed"].astype(str) + "_" + well_info["cause"].astype(str)
+    )
+    counts = strat_key.value_counts()
+    rare = counts[counts < 3].index
+    strat_key = strat_key.where(~strat_key.isin(rare), "other")
+    well_info["strat_key"] = strat_key
+
+    # Step 1: Hold out test set (NEVER touched during training)
+    trainval_ids, test_ids = train_test_split(
+        well_info["Well_ID"].values,
+        test_size=test_ratio,
+        stratify=well_info["strat_key"],
+        random_state=seed,
+    )
+
+    # Step 2: K-fold stratified split on trainval only
+    tv_info = well_info[well_info["Well_ID"].isin(trainval_ids)].copy()
+    tv_counts = tv_info["strat_key"].value_counts()
+    tv_rare = tv_counts[tv_counts < n_folds].index
+    tv_info.loc[tv_info["strat_key"].isin(tv_rare), "strat_key"] = "other"
+
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    tv_arr = tv_info["Well_ID"].values
+    tv_strat = tv_info["strat_key"].values
+
+    folds = []
+    for train_idx, val_idx in skf.split(tv_arr, tv_strat):
+        folds.append({
+            "train": list(tv_arr[train_idx]),
+            "val": list(tv_arr[val_idx]),
+        })
+
+    return folds, list(test_ids)
+
+
+def prepare_fold(df, train_wells, val_wells, feature_cols,
+                 window_size=WINDOW_SIZE, batch_size=BATCH_SIZE,
+                 num_workers=0, save_scaler=False):
+    """
+    Build train/val DataLoaders for a single CV fold.
+
+    LEAKAGE PREVENTION: Scaler is fit ONLY on train_wells rows.
+
+    Returns
+    -------
+    train_loader, val_loader, scaler, cols_to_scale
+    """
+    # Fit scaler on THIS fold's training wells only
+    df_train = df[df["Well_ID"].isin(train_wells)]
+    scaler, cols_to_scale = fit_scaler(df_train, feature_cols, save=save_scaler)
+
+    train_ds = build_dataset(df, train_wells, scaler, cols_to_scale,
+                             feature_cols, window_size)
+    val_ds = build_dataset(df, val_wells, scaler, cols_to_scale,
+                           feature_cols, window_size)
+
+    pin = torch.cuda.is_available()
+    persist = num_workers > 0
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin,
+                              persistent_workers=persist)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=pin,
+                            persistent_workers=persist)
+
+    return train_loader, val_loader, scaler, cols_to_scale
+
+
+def prepare_test(df, test_wells, scaler, cols_to_scale, feature_cols,
+                 window_size=WINDOW_SIZE, batch_size=BATCH_SIZE,
+                 num_workers=0):
+    """
+    Build test DataLoader using a pre-fitted scaler.
+
+    The scaler should be fitted on trainval data (NOT including test wells).
+    """
+    test_ds = build_dataset(df, test_wells, scaler, cols_to_scale,
+                            feature_cols, window_size)
+
+    pin = torch.cuda.is_available()
+    persist = num_workers > 0
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
+                             num_workers=num_workers, pin_memory=pin,
+                             persistent_workers=persist)
+    return test_loader

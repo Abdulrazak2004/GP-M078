@@ -28,16 +28,17 @@ RANDOM_SEED = 42
 # ---------------------------------------------------------------------------
 # Data splitting  (by Well_ID, stratified)
 # ---------------------------------------------------------------------------
-TRAIN_RATIO = 0.60   # 48 wells
-VAL_RATIO = 0.20     # 16 wells
-TEST_RATIO = 0.20    # 16 wells
+TRAIN_RATIO = 0.60   # 300 wells (for non-CV mode)
+VAL_RATIO = 0.20     # 100 wells
+TEST_RATIO = 0.20    # 100 wells
+N_CV_FOLDS = 5       # 5-fold cross-validation
 
 # ---------------------------------------------------------------------------
 # Preprocessing
 # ---------------------------------------------------------------------------
 RUL_CAP = 500        # Cap RUL target at 500 days (piece-wise linear)
 WINDOW_SIZE = 30     # Sliding window length (also try 15, 60)
-STRIDE = 1           # Window stride
+STRIDE = 5           # Window stride (5 for 500-well dataset)
 
 # Forecast horizons in days (every 30 days for 5 years = 60 monthly values)
 FORECAST_HORIZONS = list(range(30, 1830, 30))
@@ -103,7 +104,7 @@ CNN_KERNEL = 3
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 256
+BATCH_SIZE = 32
 LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 1e-4
 EPOCHS = 100
@@ -154,12 +155,6 @@ EXPERIMENTS = {
         "window_size": 30,
         "description": "Pipeline verification (cheating baseline)",
     },
-    "exp2_lstm_optA": {
-        "backbone": "SimpleLSTM",
-        "features": "A",
-        "window_size": 30,
-        "description": "Realistic baseline",
-    },
     "exp3_bilstm_optA": {
         "backbone": "BiLSTMAttention",
         "features": "A",
@@ -177,11 +172,5 @@ EXPERIMENTS = {
         "features": "A",
         "window_size": 15,
         "description": "Window size ablation (15)",
-    },
-    "exp6_bilstm_w60": {
-        "backbone": "BiLSTMAttention",
-        "features": "A",
-        "window_size": 60,
-        "description": "Window size ablation (60)",
     },
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Single experiment CLI runner.
+Single experiment CLI runner with 5-fold CV.
 
 Usage:
     python run_experiment.py --experiment exp3_bilstm_optA --gpu 0
@@ -10,7 +10,6 @@ Usage:
 import argparse
 import os
 import sys
-import json
 from pathlib import Path
 
 
@@ -72,17 +71,17 @@ def main():
     print(f"  Backbone: {exp_config['backbone']} | "
           f"Features: {exp_config['features']} | "
           f"Window: {exp_config['window_size']}")
+    print(f"  Batch size: {BATCH_SIZE} | 5-fold CV enabled")
     print(f"{'=' * 60}")
 
     # Import after CUDA_VISIBLE_DEVICES is set
     from src.train import train_experiment, seed_everything
     from src.evaluate import evaluate_experiment
-    from src.data_loader import prepare_data
     from src.models import build_model
 
     seed_everything()
 
-    # Train
+    # Train (5-fold CV + final model)
     training_info = train_experiment(exp_name, exp_config, device, output_dir)
 
     # Load best model for evaluation
@@ -90,29 +89,26 @@ def main():
     checkpoint = torch.load(exp_dir / "models" / "best_model.pt",
                             map_location=device, weights_only=False)
 
-    # Determine num_workers
-    num_workers = NUM_WORKERS if device.type == "cuda" else 0
-
-    # Prepare data again for evaluation (same splits due to fixed seed)
-    data = prepare_data(
-        feature_option=exp_config["features"],
-        window_size=exp_config.get("window_size", 30),
-        batch_size=BATCH_SIZE,
-        num_workers=num_workers,
-    )
-
-    model = build_model(exp_config["backbone"], data["n_features"]).to(device)
+    model = build_model(
+        exp_config["backbone"], training_info["n_features"]
+    ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    # Evaluate
-    metrics = evaluate_experiment(model, data, device, exp_dir, exp_name,
+    # Evaluate using data from training (test loader already prepared)
+    eval_data = training_info["eval_data"]
+    metrics = evaluate_experiment(model, eval_data, device, exp_dir, exp_name,
                                   training_info)
 
+    # Print CV summary alongside test results
+    cv = training_info.get("cv_summary", {})
     print(f"\n{'=' * 60}")
     print(f"  {exp_name} COMPLETE")
-    print(f"  RUL MAE: {metrics['rul_mae']:.1f} days  |  R²: {metrics['rul_r2']:.3f}")
-    print(f"  CR MAE: {metrics['cr_mae']:.2f} mpy  |  NMAE: {metrics['cr_nmae']:.1f}%")
-    print(f"  WT MAE: {metrics['wt_mae']:.3f} mm  |  Detection: {metrics.get('wt_loss_detection_accuracy', 0):.1%}")
+    if cv:
+        print(f"  CV RUL MAE: {cv['avg_mae_rul']:.1f} +/- {cv['std_mae_rul']:.1f} days")
+        print(f"  CV CR MAE:  {cv['avg_mae_cr']:.2f} +/- {cv['std_mae_cr']:.2f} mpy")
+    print(f"  Test RUL MAE: {metrics['rul_mae']:.1f} days  |  R2: {metrics['rul_r2']:.3f}")
+    print(f"  Test CR MAE: {metrics['cr_mae']:.2f} mpy  |  NMAE: {metrics['cr_nmae']:.1f}%")
+    print(f"  Test WT MAE: {metrics['wt_mae']:.3f} mm  |  Detection: {metrics.get('wt_loss_detection_accuracy', 0):.1%}")
     print(f"{'=' * 60}")
 
 

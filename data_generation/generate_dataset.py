@@ -267,7 +267,7 @@ def validate_generated_data(df: pd.DataFrame) -> bool:
 
 def generate_full_dataset(n_days: int = 10950, seed: int = 42) -> pd.DataFrame:
     """
-    Generate the complete 80-well dataset.
+    Generate the complete synthetic well dataset.
 
     1. Assign causes per field
     2. Sample well properties
@@ -278,8 +278,9 @@ def generate_full_dataset(n_days: int = 10950, seed: int = 42) -> pd.DataFrame:
     rng = np.random.RandomState(seed)
 
     print(f"{'=' * 65}")
+    total_wells = sum(WELL_DISTRIBUTION.values())
     print(f"  SYNTHETIC CORROSION DATA GENERATION PIPELINE  (Phase 1)")
-    print(f"  80 Wells | 30-Year Horizon | 6 Corrosion Mechanisms")
+    print(f"  {total_wells} Wells | 30-Year Horizon | 6 Corrosion Mechanisms")
     print(f"{'=' * 65}")
 
     all_wells = []
@@ -325,8 +326,8 @@ def generate_full_dataset(n_days: int = 10950, seed: int = 42) -> pd.DataFrame:
             cause_name = CAUSE_LABELS.get(cause, '?')
             status_str = f"FAILED day {life}" if failed else f"SURVIVED ({life} d)"
 
-            if well_counter % 10 == 0 or well_counter <= 3 or well_counter == 80:
-                print(f"  [{well_counter:3d}/80] {wid:>8s} | {field_name:<10s} | "
+            if well_counter % 50 == 0 or well_counter <= 3 or well_counter == total_wells:
+                print(f"  [{well_counter:3d}/{total_wells}] {wid:>8s} | {field_name:<10s} | "
                       f"Cause: {cause_name:<9s} | "
                       f"{well_dict['initial_thickness_mm']:.1f} -> "
                       f"{final_thickness:.2f} mm | "
@@ -348,13 +349,13 @@ def generate_full_dataset(n_days: int = 10950, seed: int = 42) -> pd.DataFrame:
     })
     thresholds = np.maximum(3.0, 0.5 * well_final['Initial_Thickness_mm'])
     n_failed = (well_final['Current_Thickness_mm'] < thresholds).sum()
-    print(f"  Wells Failed:   {n_failed}/80 ({100 * n_failed / 80:.0f}%)")
+    print(f"  Wells Failed:   {n_failed}/{total_wells} ({100 * n_failed / total_wells:.0f}%)")
 
     # Cause distribution
     cause_counts = dataset.groupby('Well_ID')['Corrosion_Cause'].first().value_counts().sort_index()
     print(f"\n  Cause Distribution (wells):")
     for c, count in cause_counts.items():
-        print(f"    {CAUSE_LABELS.get(c, '?'):<10s}: {count:2d} ({100 * count / 80:.0f}%)")
+        print(f"    {CAUSE_LABELS.get(c, '?'):<10s}: {count:3d} ({100 * count / total_wells:.0f}%)")
 
     print(f"\n{'─' * 65}")
 

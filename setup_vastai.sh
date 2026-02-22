@@ -36,17 +36,18 @@ echo "[2/6] Installing Python dependencies..."
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
 
-# 3. Regenerate dataset (~2 min)
-echo "[3/6] Regenerating synthetic dataset..."
+# 3. Regenerate dataset (~10-15 min for 500 wells)
+echo "[3/6] Generating synthetic dataset (500 wells, 30-year horizon)..."
 DATA_DIR="$REPO_DIR/data"
 mkdir -p "$DATA_DIR"
 
+# Always regenerate to match current config (well count may have changed)
 if [ -f "$DATA_DIR/synthetic_corrosion_dataset.csv" ]; then
-    echo "  Dataset already exists, skipping generation."
-else
-    python -m data_generation.generate_dataset
-    echo "  Dataset generated."
+    echo "  Removing old dataset..."
+    rm "$DATA_DIR/synthetic_corrosion_dataset.csv"
 fi
+python -m data_generation.generate_dataset
+echo "  Dataset generated."
 
 # Verify dataset
 if [ ! -f "$DATA_DIR/synthetic_corrosion_dataset.csv" ]; then

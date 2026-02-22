@@ -26,18 +26,19 @@ CAUSE_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
-# Well distribution across fields (total = 80)
+# Well distribution across fields (total = 500)
+# Proportions preserved from original 80-well layout, scaled 6.25x
 # ---------------------------------------------------------------------------
 WELL_DISTRIBUTION = {
-    "Ghawar": 25,
-    "Khurais": 10,
-    "Safaniya": 8,
-    "Shaybah": 6,
-    "Manifa": 6,
-    "Abqaiq": 5,
-    "Berri": 5,
-    "Zuluf": 5,
-    "Others": 10,
+    "Ghawar": 156,
+    "Khurais": 63,
+    "Safaniya": 50,
+    "Shaybah": 38,
+    "Manifa": 38,
+    "Abqaiq": 31,
+    "Berri": 31,
+    "Zuluf": 31,
+    "Others": 62,
 }
 
 # ---------------------------------------------------------------------------
