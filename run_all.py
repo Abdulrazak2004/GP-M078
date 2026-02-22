@@ -43,7 +43,7 @@ def run_single_experiment(experiment, gpu_id, output_dir):
     Returns (experiment, gpu_id, returncode, elapsed_s)
     """
     cmd = [
-        sys.executable, "run_experiment.py",
+        sys.executable, "-u", "run_experiment.py",  # -u for unbuffered output
         "--experiment", experiment,
         "--gpu", str(gpu_id),
         "--output-dir", str(output_dir),
@@ -53,20 +53,32 @@ def run_single_experiment(experiment, gpu_id, output_dir):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{experiment}.log"
 
-    print(f"  [GPU {gpu_id}] Starting {experiment} → {log_path}")
+    tag = f"[GPU{gpu_id}|{experiment}]"
+    print(f"  {tag} Starting → {log_path}")
 
     t0 = time.time()
     with open(log_path, "w") as log_file:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            stdout=log_file,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             cwd=str(Path(__file__).resolve().parent),
+            text=True,
+            bufsize=1,
         )
+        for line in proc.stdout:
+            line = line.rstrip()
+            log_file.write(line + "\n")
+            # Print key lines live (epochs, results, errors)
+            if any(k in line for k in ["Epoch", "Early stop", "PASS", "FAIL",
+                                        "MAE", "complete", "ERROR", "Traceback",
+                                        "Using GPU", "Experiment:", "parameters"]):
+                print(f"  {tag} {line}")
+        proc.wait()
     elapsed = time.time() - t0
 
     status = "OK" if proc.returncode == 0 else f"FAILED (rc={proc.returncode})"
-    print(f"  [GPU {gpu_id}] {experiment} {status} in {elapsed / 60:.1f} min")
+    print(f"  {tag} DONE — {status} in {elapsed / 60:.1f} min")
 
     return experiment, gpu_id, proc.returncode, elapsed
 
