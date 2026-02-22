@@ -46,7 +46,7 @@ if [ -f "$DATA_DIR/synthetic_corrosion_dataset.csv" ]; then
     echo "  Removing old dataset..."
     rm "$DATA_DIR/synthetic_corrosion_dataset.csv"
 fi
-python -m data_generation.generate_dataset
+python3 -m data_generation.generate_dataset
 echo "  Dataset generated."
 
 # Verify dataset
@@ -59,7 +59,7 @@ echo "  Dataset size: $FILE_SIZE"
 
 # 4. Verify GPUs
 echo "[4/6] Verifying GPUs..."
-python -c "
+python3 -c "
 import torch
 n = torch.cuda.device_count()
 print(f'  CUDA available: {torch.cuda.is_available()}')
@@ -79,7 +79,7 @@ mkdir -p outputs/logs
 # 6. Launch all experiments
 echo "[6/6] Launching parallel experiments..."
 echo ""
-python run_all.py
+python3 run_all.py
 
 echo ""
 echo "============================================================"
