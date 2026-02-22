@@ -1,0 +1,310 @@
+"""
+Multi-task model architectures for Casing RUL Prediction.
+
+All neural models share:
+  - A backbone that maps (batch, window, n_features) → (batch, hidden_dim)
+  - 5 task-specific output heads:
+      Head 1: RUL (days)          — regression, ReLU output
+      Head 2: Corrosion Rate (mpy) — regression, ReLU output
+      Head 3: Wall Thickness (mm)  — regression, ReLU output
+      Head 4: Corrosion Cause      — 6-class classification, softmax
+      Head 5: 60-Month Forecast    — 60 regression outputs (every 30 days for 5 years), ReLU
+
+Architectures:
+  0. NaiveBaseline    — linear extrapolation (not a neural net)
+  1. SimpleLSTM       — 2-layer LSTM
+  2. BiLSTMAttention  — 2-layer Bidirectional LSTM + Temporal Attention
+  3. CNNLSTM          — Conv1D feature extraction → LSTM
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+from src.attention import TemporalAttention
+from src.config import (
+    LSTM_HIDDEN_1, LSTM_HIDDEN_2,
+    DROPOUT_LSTM, DROPOUT_BILSTM, DROPOUT_HEAD,
+    CNN_FILTERS_1, CNN_FILTERS_2, CNN_KERNEL,
+    NUM_CAUSE_CLASSES, NUM_FORECAST_HORIZONS,
+)
+
+
+# ============================================================================
+# MULTI-TASK OUTPUT HEADS  (shared by all neural models)
+# ============================================================================
+
+class MultiTaskHeads(nn.Module):
+    """Five task-specific output heads fed from a shared feature vector."""
+
+    def __init__(self, input_dim):
+        super().__init__()
+
+        # Head 1: RUL (regression)
+        self.head_rul = nn.Sequential(
+            nn.Linear(input_dim, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
+            nn.ReLU(),  # RUL >= 0
+        )
+
+        # Head 2: Corrosion Rate (regression)
+        self.head_cr = nn.Sequential(
+            nn.Linear(input_dim, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
+            nn.ReLU(),  # rate >= 0
+        )
+
+        # Head 3: Wall Thickness (regression)
+        self.head_wt = nn.Sequential(
+            nn.Linear(input_dim, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
+            nn.ReLU(),  # thickness >= 0
+        )
+
+        # Head 4: Corrosion Cause (6-class classification)
+        self.head_cause = nn.Sequential(
+            nn.Linear(input_dim, 32),
+            nn.ReLU(),
+            nn.Linear(32, NUM_CAUSE_CLASSES),
+            # No softmax here — CrossEntropyLoss expects raw logits
+        )
+
+        # Head 5: 60-Month Forecast (every 30 days for 5 years)
+        self.head_forecast = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, NUM_FORECAST_HORIZONS),
+            nn.ReLU(),  # thickness >= 0
+        )
+
+    def forward(self, features):
+        """
+        Parameters
+        ----------
+        features : Tensor of shape (batch, input_dim)
+
+        Returns
+        -------
+        dict with keys: 'rul', 'cr', 'wt', 'cause', 'forecast'
+        """
+        return {
+            "rul": self.head_rul(features).squeeze(-1),       # (B,)
+            "cr": self.head_cr(features).squeeze(-1),          # (B,)
+            "wt": self.head_wt(features).squeeze(-1),          # (B,)
+            "cause": self.head_cause(features),                # (B, 6)
+            "forecast": self.head_forecast(features),          # (B, 60)
+        }
+
+
+# ============================================================================
+# MODEL 0: NAIVE BASELINE  (not a neural network)
+# ============================================================================
+
+class NaiveBaseline:
+    """
+    Linear extrapolation baseline.
+
+    Uses the slope of Current_Thickness_mm over the input window to estimate
+    when thickness will hit the failure threshold (3 mm or 50% of initial).
+
+    Not a nn.Module — used only for evaluation comparison.
+    """
+
+    def __init__(self, thickness_feature_idx, initial_thickness=11.0,
+                 failure_threshold_mm=3.0):
+        self.thickness_idx = thickness_feature_idx
+        self.initial_thickness = initial_thickness
+        self.failure_threshold = max(failure_threshold_mm,
+                                     0.5 * initial_thickness)
+
+    def predict(self, X):
+        """
+        Parameters
+        ----------
+        X : np.ndarray of shape (N, window_size, n_features) — UNSCALED
+
+        Returns
+        -------
+        rul_pred : np.ndarray of shape (N,)
+        """
+        thickness = X[:, :, self.thickness_idx]  # (N, W)
+        window_size = thickness.shape[1]
+
+        # Linear slope over window
+        t_axis = np.arange(window_size, dtype=np.float32)
+        t_mean = t_axis.mean()
+        t_var = ((t_axis - t_mean) ** 2).sum()
+
+        # Vectorized slope calculation
+        thickness_mean = thickness.mean(axis=1, keepdims=True)  # (N, 1)
+        cov = ((t_axis[None, :] - t_mean) * (thickness - thickness_mean)).sum(axis=1)
+        slope = cov / max(t_var, 1e-8)  # mm/day  (N,)
+
+        current_thickness = thickness[:, -1]  # (N,)
+
+        # RUL = (current - threshold) / |slope|
+        gap = current_thickness - self.failure_threshold
+        rul = np.where(
+            slope < -1e-8,
+            gap / np.abs(slope),
+            500.0  # no measurable decline → cap at 500 days
+        )
+
+        return np.clip(rul, 0.0, 500.0).astype(np.float32)
+
+
+# ============================================================================
+# MODEL 1: SIMPLE LSTM
+# ============================================================================
+
+class SimpleLSTM(nn.Module):
+    """
+    Two-layer stacked LSTM → shared features → multi-task heads.
+    """
+
+    def __init__(self, n_features, hidden1=LSTM_HIDDEN_1,
+                 hidden2=LSTM_HIDDEN_2, dropout=DROPOUT_LSTM):
+        super().__init__()
+
+        self.lstm1 = nn.LSTM(n_features, hidden1, batch_first=True)
+        self.drop1 = nn.Dropout(dropout)
+        self.lstm2 = nn.LSTM(hidden1, hidden2, batch_first=True)
+        self.drop2 = nn.Dropout(dropout)
+
+        self.heads = MultiTaskHeads(hidden2)
+
+    def forward(self, x):
+        """x: (batch, window, n_features) → dict of predictions"""
+        out, _ = self.lstm1(x)
+        out = self.drop1(out)
+        out, _ = self.lstm2(out)
+        out = self.drop2(out)
+
+        # Take last timestep
+        features = out[:, -1, :]  # (B, hidden2)
+        return self.heads(features)
+
+
+# ============================================================================
+# MODEL 2: BiLSTM + TEMPORAL ATTENTION
+# ============================================================================
+
+class BiLSTMAttention(nn.Module):
+    """
+    Two-layer Bidirectional LSTM + Temporal Attention → multi-task heads.
+    """
+
+    def __init__(self, n_features, hidden1=LSTM_HIDDEN_1,
+                 hidden2=LSTM_HIDDEN_2, dropout=DROPOUT_BILSTM):
+        super().__init__()
+
+        self.lstm1 = nn.LSTM(n_features, hidden1, batch_first=True,
+                             bidirectional=True)
+        self.drop1 = nn.Dropout(dropout)
+        self.lstm2 = nn.LSTM(hidden1 * 2, hidden2, batch_first=True,
+                             bidirectional=True)
+        self.drop2 = nn.Dropout(dropout)
+
+        # Attention over timesteps (hidden2 * 2 due to bidirectional)
+        self.attention = TemporalAttention(hidden2 * 2)
+
+        # Extra dropout before heads
+        self.drop3 = nn.Dropout(DROPOUT_HEAD)
+
+        self.heads = MultiTaskHeads(hidden2 * 2)
+
+    def forward(self, x):
+        """x: (batch, window, n_features) → dict of predictions"""
+        out, _ = self.lstm1(x)
+        out = self.drop1(out)
+        out, _ = self.lstm2(out)
+        out = self.drop2(out)
+
+        # Attention-weighted sum over timesteps
+        features, self._attn_weights = self.attention(out)  # (B, hidden2*2)
+        features = self.drop3(features)
+
+        return self.heads(features)
+
+    @property
+    def attention_weights(self):
+        """Access last-computed attention weights for interpretability."""
+        return self._attn_weights
+
+
+# ============================================================================
+# MODEL 3: CNN-LSTM HYBRID
+# ============================================================================
+
+class CNNLSTM(nn.Module):
+    """
+    Conv1D feature extraction → LSTM → multi-task heads.
+
+    CNN captures local patterns (short-term trends),
+    LSTM captures longer temporal dependencies.
+    """
+
+    def __init__(self, n_features, cnn1=CNN_FILTERS_1, cnn2=CNN_FILTERS_2,
+                 kernel=CNN_KERNEL, lstm_hidden=LSTM_HIDDEN_1,
+                 dropout=DROPOUT_LSTM):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(n_features, cnn1, kernel_size=kernel, padding=0)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv1d(cnn1, cnn2, kernel_size=kernel, padding=0)
+        self.relu2 = nn.ReLU()
+        self.pool = nn.MaxPool1d(kernel_size=2)
+
+        self.lstm = nn.LSTM(cnn2, lstm_hidden, batch_first=True)
+        self.drop = nn.Dropout(dropout)
+
+        self.heads = MultiTaskHeads(lstm_hidden)
+
+    def forward(self, x):
+        """x: (batch, window, n_features) → dict of predictions"""
+        # Conv1d expects (B, C, L) — transpose from (B, L, C)
+        out = x.transpose(1, 2)              # (B, n_features, window)
+        out = self.relu1(self.conv1(out))     # (B, cnn1, window-2)
+        out = self.relu2(self.conv2(out))     # (B, cnn2, window-4)
+        out = self.pool(out)                  # (B, cnn2, (window-4)//2)
+
+        # Back to (B, L, C) for LSTM
+        out = out.transpose(1, 2)
+        out, _ = self.lstm(out)
+        out = self.drop(out)
+
+        # Take last timestep
+        features = out[:, -1, :]             # (B, lstm_hidden)
+        return self.heads(features)
+
+
+# ============================================================================
+# MODEL FACTORY
+# ============================================================================
+
+def build_model(name, n_features):
+    """
+    Instantiate a model by name.
+
+    Parameters
+    ----------
+    name : str
+        One of 'SimpleLSTM', 'BiLSTMAttention', 'CNNLSTM'
+    n_features : int
+        Number of input features per timestep
+
+    Returns
+    -------
+    nn.Module
+    """
+    models = {
+        "SimpleLSTM": SimpleLSTM,
+        "BiLSTMAttention": BiLSTMAttention,
+        "CNNLSTM": CNNLSTM,
+    }
+    if name not in models:
+        raise ValueError(f"Unknown model: {name}. Choose from {list(models.keys())}")
+    return models[name](n_features)
