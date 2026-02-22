@@ -1,10 +1,13 @@
 """
 TimesFM forecast comparison experiment.
 
-Loads google/timesfm-2.5-200m-pytorch and compares its 60-month thickness
-forecast against our LSTM Head 5 output on the test set.
+Loads google/timesfm-2.5-200m-pytorch via HuggingFace and compares its
+60-month thickness forecast against our LSTM Head 5 output on the test set.
 
 Inference-only, ~5 min runtime.
+
+Install: pip install timesfm-torch
+(lightweight PyTorch-only package, no JAX/lingvo deps)
 """
 
 import json
@@ -14,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 
 import matplotlib
 matplotlib.use("Agg")
@@ -27,12 +31,28 @@ from src.config import (
 from src.data_loader import load_dataset, split_wells
 
 
+def _try_import_timesfm():
+    """Try importing timesfm, guide user on install if missing."""
+    try:
+        import timesfm
+        return timesfm
+    except ImportError:
+        pass
+
+    raise ImportError(
+        "TimesFM not installed. Install the PyTorch-only package:\n"
+        "  pip install timesfm-torch\n"
+        "If that fails, try:\n"
+        "  pip install timesfm --no-deps && pip install jax jaxlib\n"
+    )
+
+
 def run_timesfm_experiment(output_dir, device=None):
     """
     Run TimesFM forecast comparison.
 
     1. Load test wells' thickness history
-    2. Feed to TimesFM → forecast 60 months (1800 days)
+    2. Feed to TimesFM -> forecast 60 months (1800 days)
     3. Compare MAE per monthly horizon
     4. Save metrics + plots
 
@@ -47,7 +67,7 @@ def run_timesfm_experiment(output_dir, device=None):
     -------
     dict with comparison metrics
     """
-    import timesfm
+    timesfm = _try_import_timesfm()
 
     out = Path(output_dir) / "timesfm_comparison"
     metric_dir = out / "metrics"
@@ -67,11 +87,12 @@ def run_timesfm_experiment(output_dir, device=None):
     print(f"  Test wells: {len(test_wells)}")
 
     # Initialize TimesFM
-    print("Loading TimesFM model...")
+    print("Loading TimesFM model (downloading if first run)...")
     t0 = time.time()
+    backend = "gpu" if (device and device.type == "cuda") else "cpu"
     tfm = timesfm.TimesFm(
         hparams=timesfm.TimesFmHparams(
-            backend="gpu" if (device and device.type == "cuda") else "cpu",
+            backend=backend,
             per_core_batch_size=32,
             horizon_len=NUM_FORECAST_HORIZONS,
         ),
@@ -79,18 +100,17 @@ def run_timesfm_experiment(output_dir, device=None):
             huggingface_repo_id="google/timesfm-2.5-200m-pytorch",
         ),
     )
-    print(f"  Model loaded in {time.time() - t0:.1f}s")
+    print(f"  Model loaded in {time.time() - t0:.1f}s ({backend})")
 
     # For each test well: extract thickness history, forecast, compare
-    all_horizon_errors = []  # (n_wells, 60) — per-horizon absolute errors
+    all_horizon_errors = []  # (n_wells, 60) -- per-horizon absolute errors
     well_metrics = []
     n_valid_wells = 0
 
     print("Running forecasts per well...")
-    for wid in test_wells:
+    for wid in tqdm(test_wells, desc="  Wells", bar_format="{l_bar}{bar:20}{r_bar}"):
         df_well = df[df["Well_ID"] == wid].sort_values("Day").reset_index(drop=True)
 
-        # We use the first `context_len` days of thickness as input
         thickness = df_well[TARGET_WT].values.astype(np.float32)
         n_days = len(thickness)
 
@@ -111,29 +131,23 @@ def run_timesfm_experiment(output_dir, device=None):
                 ground_truth.append(np.nan)
         ground_truth = np.array(ground_truth, dtype=np.float32)
 
-        # TimesFM forecast (returns point forecasts for horizon_len steps)
-        # TimesFM expects daily data — we ask for 60 steps at 30-day frequency
-        # by subsampling every 30 days from a longer daily forecast
         try:
-            # Forecast daily for enough steps, then subsample
             forecast_output = tfm.forecast(
                 [context.tolist()],
                 freq=[0],  # 0 = unknown/daily granularity
             )
             point_forecast = np.array(forecast_output[0][0], dtype=np.float32)
 
-            # The forecast has horizon_len=60 points
-            # Map them to our 60 monthly horizons
+            # Map to our 60 monthly horizons
             if len(point_forecast) >= NUM_FORECAST_HORIZONS:
                 tfm_pred = point_forecast[:NUM_FORECAST_HORIZONS]
             else:
-                # Pad with last value if needed
                 pad = np.full(NUM_FORECAST_HORIZONS - len(point_forecast),
                               point_forecast[-1])
                 tfm_pred = np.concatenate([point_forecast, pad])
 
         except Exception as e:
-            print(f"  Warning: TimesFM failed for {wid}: {e}")
+            tqdm.write(f"  Warning: TimesFM failed for {wid}: {e}")
             continue
 
         # Compute per-horizon absolute errors
