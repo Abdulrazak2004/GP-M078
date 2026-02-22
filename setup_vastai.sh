@@ -33,7 +33,7 @@ fi
 
 # 2. Install dependencies
 echo "[2/6] Installing Python dependencies..."
-pip install --quiet --upgrade pip
+pip install --quiet --upgrade pip 2>/dev/null || true  # may fail on Debian-managed pip
 pip install --quiet -r requirements.txt
 
 # 3. Regenerate dataset (~10-15 min for 500 wells)
