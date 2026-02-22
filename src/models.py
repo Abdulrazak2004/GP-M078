@@ -3,12 +3,13 @@ Multi-task model architectures for Casing RUL Prediction.
 
 All neural models share:
   - A backbone that maps (batch, window, n_features) → (batch, hidden_dim)
-  - 5 task-specific output heads:
-      Head 1: RUL (days)          — regression, ReLU output
+  - 4 task-specific output heads:
+      Head 1: RUL (days)          — regression, clamped [0, 500]
       Head 2: Corrosion Rate (mpy) — regression, ReLU output
       Head 3: Wall Thickness (mm)  — regression, ReLU output
-      Head 4: Corrosion Cause      — 6-class classification, softmax
-      Head 5: 60-Month Forecast    — 60 regression outputs (every 30 days for 5 years), ReLU
+      Head 4: 60-Month Forecast    — 60 regression outputs (every 30 days for 5 years), ReLU
+
+  Note: Corrosion Cause classification is trained as a separate model.
 
 Architectures:
   0. NaiveBaseline    — linear extrapolation (not a neural net)
@@ -26,7 +27,7 @@ from src.config import (
     LSTM_HIDDEN_1, LSTM_HIDDEN_2,
     DROPOUT_LSTM, DROPOUT_BILSTM, DROPOUT_HEAD,
     CNN_FILTERS_1, CNN_FILTERS_2, CNN_KERNEL,
-    NUM_CAUSE_CLASSES, NUM_FORECAST_HORIZONS,
+    NUM_FORECAST_HORIZONS,
     RUL_CAP,
 )
 
@@ -36,7 +37,10 @@ from src.config import (
 # ============================================================================
 
 class MultiTaskHeads(nn.Module):
-    """Five task-specific output heads fed from a shared feature vector."""
+    """Four task-specific output heads fed from a shared feature vector.
+
+    Cause classification is trained separately — not part of this model.
+    """
 
     def __init__(self, input_dim):
         super().__init__()
@@ -64,17 +68,7 @@ class MultiTaskHeads(nn.Module):
             nn.ReLU(),  # thickness >= 0
         )
 
-        # Head 4: Corrosion Cause (6-class classification) — bigger head
-        self.head_cause = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(DROPOUT_HEAD),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, NUM_CAUSE_CLASSES),
-        )
-
-        # Head 5: 60-Month Forecast (every 30 days for 5 years)
+        # Head 4: 60-Month Forecast (every 30 days for 5 years)
         self.head_forecast = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
@@ -90,7 +84,7 @@ class MultiTaskHeads(nn.Module):
 
         Returns
         -------
-        dict with keys: 'rul', 'cr', 'wt', 'cause', 'forecast'
+        dict with keys: 'rul', 'cr', 'wt', 'forecast'
         """
         rul = self.head_rul(features).squeeze(-1)
         rul = rul.clamp(0.0, RUL_CAP)  # enforce [0, 500]
@@ -98,7 +92,6 @@ class MultiTaskHeads(nn.Module):
             "rul": rul,                                        # (B,)
             "cr": self.head_cr(features).squeeze(-1),          # (B,)
             "wt": self.head_wt(features).squeeze(-1),          # (B,)
-            "cause": self.head_cause(features),                # (B, 6)
             "forecast": self.head_forecast(features),          # (B, 60)
         }
 

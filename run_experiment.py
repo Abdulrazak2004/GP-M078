@@ -110,9 +110,9 @@ def main():
 
     print(f"\n{'=' * 60}")
     print(f"  {exp_name} COMPLETE")
-    print(f"  RUL MAE: {metrics['rul_mae']:.1f} days")
-    print(f"  RUL R²: {metrics['rul_r2']:.3f}")
-    print(f"  Cause Acc: {metrics['cause_accuracy']:.3f}")
+    print(f"  RUL MAE: {metrics['rul_mae']:.1f} days  |  R²: {metrics['rul_r2']:.3f}")
+    print(f"  CR MAE: {metrics['cr_mae']:.2f} mpy  |  MAPE: {metrics['cr_mape']:.1f}%")
+    print(f"  WT MAE: {metrics['wt_mae']:.3f} mm  |  Detection: {metrics.get('wt_loss_detection_accuracy', 0):.1%}")
     print(f"{'=' * 60}")
 
 

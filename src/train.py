@@ -65,7 +65,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
 
         preds = model(X)
         total_loss, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                          y_cause, y_forecast)
+                                          y_forecast)
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -92,14 +92,14 @@ def validate(model, loader, criterion, device):
     -------
     avg_losses : dict
     mae_rul : float — mean absolute error on RUL
-    accuracy_cause : float — classification accuracy for corrosion cause
+    mae_cr : float — mean absolute error on corrosion rate
     """
     model.eval()
     accum = {}
     n_batches = 0
 
     all_rul_pred, all_rul_true = [], []
-    all_cause_pred, all_cause_true = [], []
+    all_cr_pred, all_cr_true = [], []
 
     pbar = tqdm(loader, desc="  Val  ", leave=False,
                 bar_format="{l_bar}{bar:20}{r_bar}")
@@ -110,7 +110,7 @@ def validate(model, loader, criterion, device):
 
         preds = model(X)
         _, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                 y_cause, y_forecast)
+                                 y_forecast)
 
         for k, v in loss_dict.items():
             accum[k] = accum.get(k, 0.0) + v
@@ -118,8 +118,8 @@ def validate(model, loader, criterion, device):
 
         all_rul_pred.append(preds["rul"].cpu())
         all_rul_true.append(y_rul.cpu())
-        all_cause_pred.append(preds["cause"].argmax(dim=1).cpu())
-        all_cause_true.append(y_cause.cpu())
+        all_cr_pred.append(preds["cr"].cpu())
+        all_cr_true.append(y_cr.cpu())
 
     pbar.close()
     avg_losses = {k: v / n_batches for k, v in accum.items()}
@@ -128,11 +128,11 @@ def validate(model, loader, criterion, device):
     rul_true = torch.cat(all_rul_true)
     mae_rul = (rul_pred - rul_true).abs().mean().item()
 
-    cause_pred = torch.cat(all_cause_pred)
-    cause_true = torch.cat(all_cause_true)
-    accuracy_cause = (cause_pred == cause_true).float().mean().item()
+    cr_pred = torch.cat(all_cr_pred)
+    cr_true = torch.cat(all_cr_true)
+    mae_cr = (cr_pred - cr_true).abs().mean().item()
 
-    return avg_losses, mae_rul, accuracy_cause
+    return avg_losses, mae_rul, mae_cr
 
 
 def train_experiment(name, exp_config, device, output_dir):
@@ -199,7 +199,7 @@ def train_experiment(name, exp_config, device, output_dir):
     # Training loop
     history = {
         "train_loss": [], "val_loss": [],
-        "val_mae_rul": [], "val_acc_cause": [],
+        "val_mae_rul": [], "val_mae_cr": [],
         "lr": [],
     }
     best_val_loss = float("inf")
@@ -216,8 +216,8 @@ def train_experiment(name, exp_config, device, output_dir):
                                        optimizer, device)
 
         # Validate
-        val_losses, mae_rul, acc_cause = validate(model, val_loader,
-                                                  criterion, device)
+        val_losses, mae_rul, mae_cr = validate(model, val_loader,
+                                               criterion, device)
 
         # Scheduler step
         scheduler.step(val_losses["total"])
@@ -227,15 +227,15 @@ def train_experiment(name, exp_config, device, output_dir):
         history["train_loss"].append(train_losses["total"])
         history["val_loss"].append(val_losses["total"])
         history["val_mae_rul"].append(mae_rul)
-        history["val_acc_cause"].append(acc_cause)
+        history["val_mae_cr"].append(mae_cr)
         history["lr"].append(current_lr)
 
         # Update epoch progress bar
         star = "*" if val_losses["total"] < best_val_loss else ""
         epoch_pbar.set_postfix_str(
             f"loss={val_losses['total']:.2f}{star} "
-            f"MAE={mae_rul:.1f}d "
-            f"Acc={acc_cause:.3f} "
+            f"MAE_RUL={mae_rul:.1f}d "
+            f"MAE_CR={mae_cr:.2f}mpy "
             f"LR={current_lr:.1e} "
             f"pat={patience_counter}/{EARLY_STOP_PATIENCE}"
         )
@@ -247,7 +247,7 @@ def train_experiment(name, exp_config, device, output_dir):
                 f"Train: {train_losses['total']:.4f} | "
                 f"Val: {val_losses['total']:.4f} | "
                 f"MAE_RUL: {mae_rul:.1f} | "
-                f"Acc_Cause: {acc_cause:.3f} | "
+                f"MAE_CR: {mae_cr:.2f} | "
                 f"LR: {current_lr:.2e}"
             )
 
@@ -298,10 +298,10 @@ def train_experiment(name, exp_config, device, output_dir):
     axes[1].set_ylabel("MAE (days)")
     axes[1].set_title("Validation MAE — RUL")
 
-    axes[2].plot(epochs_range, history["val_acc_cause"], color="green")
+    axes[2].plot(epochs_range, history["val_mae_cr"], color="green")
     axes[2].set_xlabel("Epoch")
-    axes[2].set_ylabel("Accuracy")
-    axes[2].set_title("Validation Accuracy — Cause")
+    axes[2].set_ylabel("MAE (mpy)")
+    axes[2].set_title("Validation MAE — Corrosion Rate")
 
     plt.tight_layout()
     fig.savefig(plot_dir / "loss_curves.png", dpi=150, bbox_inches="tight")

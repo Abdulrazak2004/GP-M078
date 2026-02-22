@@ -71,8 +71,9 @@ def run_single_experiment(experiment, gpu_id, output_dir):
             log_file.write(line + "\n")
             # Print key lines live (epochs, results, errors)
             if any(k in line for k in ["Epoch", "Early stop", "PASS", "FAIL",
-                                        "MAE", "complete", "ERROR", "Traceback",
-                                        "Using GPU", "Experiment:", "parameters"]):
+                                        "MAE", "MAPE", "complete", "ERROR",
+                                        "Traceback", "Using GPU", "Experiment:",
+                                        "parameters", "COMPLETE", "Detection"]):
                 print(f"  {tag} {line}")
         proc.wait()
     elapsed = time.time() - t0
@@ -117,11 +118,11 @@ def build_comparison_table(output_dir):
             "rul_rmse": m.get("rul_rmse"),
             "rul_r2": m.get("rul_r2"),
             "cr_mae": m.get("cr_mae"),
+            "cr_mape": m.get("cr_mape"),
             "cr_r2": m.get("cr_r2"),
             "wt_mae": m.get("wt_mae"),
             "wt_r2": m.get("wt_r2"),
-            "cause_accuracy": m.get("cause_accuracy"),
-            "cause_f1_macro": m.get("cause_f1_macro"),
+            "wt_loss_detect": m.get("wt_loss_detection_accuracy"),
             "forecast_avg_mae": m.get("forecast_avg_mae"),
             "baseline_rul_mae": m.get("baseline_rul_mae"),
         }
@@ -163,11 +164,14 @@ def build_comparison_table(output_dir):
     ax.set_xlabel("R²")
     ax.set_title("RUL R²")
 
-    # Cause Accuracy
+    # CR MAPE (spec S2)
     ax = axes[1, 0]
-    ax.barh(df["experiment"], df["cause_accuracy"], color="darkorange")
-    ax.set_xlabel("Accuracy")
-    ax.set_title("Cause Classification Accuracy")
+    if "cr_mape" in df.columns:
+        ax.barh(df["experiment"], df["cr_mape"], color="darkorange")
+        ax.axvline(5.0, color="red", linestyle="--", label="Spec S2 (5%)")
+        ax.legend()
+    ax.set_xlabel("MAPE (%)")
+    ax.set_title("Corrosion Rate MAPE (spec S2)")
 
     # Forecast MAE
     ax = axes[1, 1]

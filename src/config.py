@@ -116,11 +116,10 @@ HUBER_DELTA_CR = 3.0
 HUBER_DELTA_WT = 1.5
 HUBER_DELTA_FORECAST = 1.5
 
-# Multi-task loss weights
+# Multi-task loss weights  (cause removed — trained separately)
 LOSS_WEIGHT_RUL = 1.0       # Primary objective
-LOSS_WEIGHT_CR = 2.0        # Corrosion rate (boosted)
-LOSS_WEIGHT_WT = 1.0        # Wall thickness (boosted)
-LOSS_WEIGHT_CAUSE = 8.0     # Cause classification (heavily boosted — was drowning)
+LOSS_WEIGHT_CR = 3.0        # Corrosion rate (spec S2)
+LOSS_WEIGHT_WT = 2.0        # Wall thickness (spec IS1)
 LOSS_WEIGHT_FORECAST = 0.5  # 60-month forecast
 
 # MC Dropout inference
