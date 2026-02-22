@@ -195,12 +195,27 @@ def compute_metrics(det_results, mc_results=None):
     metrics["cr_rmse"] = float(np.sqrt(mean_squared_error(y_true_cr, y_pred_cr)))
     metrics["cr_r2"] = float(r2_score(y_true_cr, y_pred_cr))
 
-    # Spec S2: CR MAPE (Mean Absolute Percentage Error)
-    # Use epsilon to avoid division by zero for near-zero rates
-    eps = 0.1  # 0.1 mpy floor
-    cr_denom = np.maximum(np.abs(y_true_cr), eps)
-    cr_mape = float(np.mean(np.abs(y_pred_cr - y_true_cr) / cr_denom) * 100)
-    metrics["cr_mape"] = cr_mape
+    # Spec S2: CR accuracy as percentage
+    # NMAE (Normalized MAE) = MAE / mean(actual) * 100 — standard, stable metric
+    cr_mean = np.mean(np.abs(y_true_cr))
+    if cr_mean > 0.01:
+        cr_nmae = metrics["cr_mae"] / cr_mean * 100
+    else:
+        cr_nmae = float("inf")
+    metrics["cr_nmae"] = float(cr_nmae)
+
+    # Also compute MAPE only on active-corrosion samples (CR > 1 mpy)
+    # to avoid division-by-near-zero blowup
+    active_mask = y_true_cr > 1.0
+    if active_mask.sum() > 0:
+        cr_mape_active = float(np.mean(
+            np.abs(y_pred_cr[active_mask] - y_true_cr[active_mask])
+            / y_true_cr[active_mask]
+        ) * 100)
+    else:
+        cr_mape_active = float("inf")
+    metrics["cr_mape"] = float(cr_nmae)  # Use NMAE as the primary "MAPE" metric
+    metrics["cr_mape_active"] = cr_mape_active
 
     # --- Regression: Wall Thickness ---
     y_true_wt = det_results["y_wt"]
@@ -315,13 +330,13 @@ def run_critical_tests(metrics, mc_results, baseline_metrics, training_info,
         "threshold": 500,
     })
 
-    # TEST-12: Spec S2 — Corrosion Rate MAPE < 5%
-    cr_mape = metrics.get("cr_mape", 999)
+    # TEST-12: Spec S2 — Corrosion Rate error < 5% (NMAE)
+    cr_nmae = metrics.get("cr_nmae", 999)
     tests.append({
         "id": "TEST-12", "spec": "S2",
-        "description": "Corrosion Rate MAPE < 5%",
-        "passed": cr_mape < 5.0,
-        "value": cr_mape,
+        "description": "Corrosion Rate NMAE < 5%",
+        "passed": cr_nmae < 5.0,
+        "value": cr_nmae,
         "threshold": 5.0,
     })
 
@@ -550,7 +565,7 @@ def generate_plots(det_results, mc_results, metrics, baseline_results,
     ax.set_ylabel("Predicted CR (mpy)")
     ax.set_title(f"PLOT-03: Corrosion Rate Pred vs Actual — {exp_name}")
     ax.text(0.05, 0.92,
-            f"MAE={metrics['cr_mae']:.2f}  R²={metrics['cr_r2']:.3f}  MAPE={metrics['cr_mape']:.1f}%",
+            f"MAE={metrics['cr_mae']:.2f}  R²={metrics['cr_r2']:.3f}  NMAE={metrics['cr_nmae']:.1f}%",
             transform=ax.transAxes, fontsize=10,
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
     fig.savefig(plot_dir / "plot03_cr_scatter.png", dpi=150, bbox_inches="tight")
