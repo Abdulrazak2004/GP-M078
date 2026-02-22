@@ -27,6 +27,7 @@ from src.config import (
     DROPOUT_LSTM, DROPOUT_BILSTM, DROPOUT_HEAD,
     CNN_FILTERS_1, CNN_FILTERS_2, CNN_KERNEL,
     NUM_CAUSE_CLASSES, NUM_FORECAST_HORIZONS,
+    RUL_CAP,
 )
 
 
@@ -40,36 +41,37 @@ class MultiTaskHeads(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
 
-        # Head 1: RUL (regression)
+        # Head 1: RUL (regression) — clamped to [0, RUL_CAP]
         self.head_rul = nn.Sequential(
-            nn.Linear(input_dim, 16),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
-            nn.Linear(16, 1),
-            nn.ReLU(),  # RUL >= 0
+            nn.Linear(32, 1),
         )
 
         # Head 2: Corrosion Rate (regression)
         self.head_cr = nn.Sequential(
-            nn.Linear(input_dim, 16),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
-            nn.Linear(16, 1),
+            nn.Linear(32, 1),
             nn.ReLU(),  # rate >= 0
         )
 
         # Head 3: Wall Thickness (regression)
         self.head_wt = nn.Sequential(
-            nn.Linear(input_dim, 16),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
-            nn.Linear(16, 1),
+            nn.Linear(32, 1),
             nn.ReLU(),  # thickness >= 0
         )
 
-        # Head 4: Corrosion Cause (6-class classification)
+        # Head 4: Corrosion Cause (6-class classification) — bigger head
         self.head_cause = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
+            nn.Linear(64, 32),
             nn.ReLU(),
             nn.Linear(32, NUM_CAUSE_CLASSES),
-            # No softmax here — CrossEntropyLoss expects raw logits
         )
 
         # Head 5: 60-Month Forecast (every 30 days for 5 years)
@@ -90,8 +92,10 @@ class MultiTaskHeads(nn.Module):
         -------
         dict with keys: 'rul', 'cr', 'wt', 'cause', 'forecast'
         """
+        rul = self.head_rul(features).squeeze(-1)
+        rul = rul.clamp(0.0, RUL_CAP)  # enforce [0, 500]
         return {
-            "rul": self.head_rul(features).squeeze(-1),       # (B,)
+            "rul": rul,                                        # (B,)
             "cr": self.head_cr(features).squeeze(-1),          # (B,)
             "wt": self.head_wt(features).squeeze(-1),          # (B,)
             "cause": self.head_cause(features),                # (B, 6)

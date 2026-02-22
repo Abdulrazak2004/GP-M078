@@ -23,7 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.config import (
-    BATCH_SIZE, LEARNING_RATE, EPOCHS,
+    BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY, EPOCHS,
     EARLY_STOP_PATIENCE, LR_REDUCE_PATIENCE, LR_REDUCE_FACTOR,
     GRAD_CLIP_NORM, RANDOM_SEED,
     EXPERIMENTS, FEATURES_A, FEATURES_B, NUM_WORKERS,
@@ -189,7 +189,7 @@ def train_experiment(name, exp_config, device, output_dir):
     print(f"[{name}] Trainable parameters: {param_count:,}")
 
     # Optimizer + scheduler + loss
-    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min", patience=LR_REDUCE_PATIENCE,
         factor=LR_REDUCE_FACTOR,

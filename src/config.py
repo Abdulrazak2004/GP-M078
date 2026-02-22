@@ -93,9 +93,9 @@ NUM_CAUSE_CLASSES = 6
 # ---------------------------------------------------------------------------
 LSTM_HIDDEN_1 = 64
 LSTM_HIDDEN_2 = 32
-DROPOUT_LSTM = 0.2
-DROPOUT_BILSTM = 0.3
-DROPOUT_HEAD = 0.2
+DROPOUT_LSTM = 0.3
+DROPOUT_BILSTM = 0.4
+DROPOUT_HEAD = 0.3
 CNN_FILTERS_1 = 32
 CNN_FILTERS_2 = 64
 CNN_KERNEL = 3
@@ -104,23 +104,24 @@ CNN_KERNEL = 3
 # Training
 # ---------------------------------------------------------------------------
 BATCH_SIZE = 256
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 5e-4
+WEIGHT_DECAY = 1e-4
 EPOCHS = 100
-EARLY_STOP_PATIENCE = 15
-LR_REDUCE_PATIENCE = 5
+EARLY_STOP_PATIENCE = 20
+LR_REDUCE_PATIENCE = 7
 LR_REDUCE_FACTOR = 0.5
 GRAD_CLIP_NORM = 1.0
-HUBER_DELTA_RUL = 100.0
-HUBER_DELTA_CR = 50.0
-HUBER_DELTA_WT = 50.0     # wall thickness
-HUBER_DELTA_FORECAST = 50.0
+HUBER_DELTA_RUL = 20.0
+HUBER_DELTA_CR = 3.0
+HUBER_DELTA_WT = 1.5
+HUBER_DELTA_FORECAST = 1.5
 
 # Multi-task loss weights
 LOSS_WEIGHT_RUL = 1.0       # Primary objective
-LOSS_WEIGHT_CR = 0.5        # Corrosion rate
-LOSS_WEIGHT_WT = 0.5        # Wall thickness
-LOSS_WEIGHT_CAUSE = 0.3     # Cause classification
-LOSS_WEIGHT_FORECAST = 0.5  # 5-year forecast
+LOSS_WEIGHT_CR = 2.0        # Corrosion rate (boosted)
+LOSS_WEIGHT_WT = 1.0        # Wall thickness (boosted)
+LOSS_WEIGHT_CAUSE = 8.0     # Cause classification (heavily boosted — was drowning)
+LOSS_WEIGHT_FORECAST = 0.5  # 60-month forecast
 
 # MC Dropout inference
 MC_DROPOUT_SAMPLES = 50

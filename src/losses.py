@@ -44,7 +44,13 @@ class MultiTaskLoss(nn.Module):
         self.huber_cr = nn.HuberLoss(delta=HUBER_DELTA_CR)
         self.huber_wt = nn.HuberLoss(delta=HUBER_DELTA_WT)
         self.huber_forecast = nn.HuberLoss(delta=HUBER_DELTA_FORECAST, reduction="none")
-        self.ce_cause = nn.CrossEntropyLoss()
+
+        # Inverse-frequency class weights for cause classification
+        # Distribution: CO2=42%, H2S=9%, MIC=11%, Erosion=10%, O2=6%, Combined=21%
+        cause_weights = torch.tensor([1/0.42, 1/0.09, 1/0.11, 1/0.10, 1/0.06, 1/0.21])
+        cause_weights = cause_weights / cause_weights.sum() * 6  # normalize to sum=6
+        self.register_buffer("cause_weights", cause_weights)
+        self.ce_cause = nn.CrossEntropyLoss(weight=cause_weights)
 
     def forward(self, preds, y_rul, y_cr, y_wt, y_cause, y_forecast):
         """
