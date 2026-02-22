@@ -6,8 +6,7 @@ Loads google/timesfm-2.5-200m-pytorch via HuggingFace and compares its
 
 Inference-only, ~5 min runtime.
 
-Install: pip install timesfm-torch
-(lightweight PyTorch-only package, no JAX/lingvo deps)
+Install: pip install git+https://github.com/google-research/timesfm.git
 """
 
 import json
@@ -31,22 +30,6 @@ from src.config import (
 from src.data_loader import load_dataset, split_wells
 
 
-def _try_import_timesfm():
-    """Try importing timesfm, guide user on install if missing."""
-    try:
-        import timesfm
-        return timesfm
-    except ImportError:
-        pass
-
-    raise ImportError(
-        "TimesFM not installed. Install the PyTorch-only package:\n"
-        "  pip install timesfm-torch\n"
-        "If that fails, try:\n"
-        "  pip install timesfm --no-deps && pip install jax jaxlib\n"
-    )
-
-
 def run_timesfm_experiment(output_dir, device=None):
     """
     Run TimesFM forecast comparison.
@@ -67,7 +50,7 @@ def run_timesfm_experiment(output_dir, device=None):
     -------
     dict with comparison metrics
     """
-    timesfm = _try_import_timesfm()
+    import timesfm
 
     out = Path(output_dir) / "timesfm_comparison"
     metric_dir = out / "metrics"
@@ -86,21 +69,25 @@ def run_timesfm_experiment(output_dir, device=None):
     test_wells = splits["test"]
     print(f"  Test wells: {len(test_wells)}")
 
-    # Initialize TimesFM
+    # Initialize TimesFM 2.5 (new API)
     print("Loading TimesFM model (downloading if first run)...")
     t0 = time.time()
-    backend = "gpu" if (device and device.type == "cuda") else "cpu"
-    tfm = timesfm.TimesFm(
-        hparams=timesfm.TimesFmHparams(
-            backend=backend,
-            per_core_batch_size=32,
-            horizon_len=NUM_FORECAST_HORIZONS,
-        ),
-        checkpoint=timesfm.TimesFmCheckpoint(
-            huggingface_repo_id="google/timesfm-2.5-200m-pytorch",
-        ),
+    tfm = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+        "google/timesfm-2.5-200m-pytorch",
+        torch_compile=False,
     )
-    print(f"  Model loaded in {time.time() - t0:.1f}s ({backend})")
+    tfm.compile(
+        timesfm.ForecastConfig(
+            max_context=1024,
+            max_horizon=NUM_FORECAST_HORIZONS,
+            normalize_inputs=True,
+            use_continuous_quantile_head=True,
+            force_flip_invariance=True,
+            infer_is_positive=True,
+            fix_quantile_crossing=True,
+        )
+    )
+    print(f"  Model loaded in {time.time() - t0:.1f}s")
 
     # For each test well: extract thickness history, forecast, compare
     all_horizon_errors = []  # (n_wells, 60) -- per-horizon absolute errors
@@ -132,19 +119,20 @@ def run_timesfm_experiment(output_dir, device=None):
         ground_truth = np.array(ground_truth, dtype=np.float32)
 
         try:
-            forecast_output = tfm.forecast(
-                [context.tolist()],
-                freq=[0],  # 0 = unknown/daily granularity
+            # TimesFM 2.5 API: forecast(horizon, inputs)
+            point_forecast, quantile_forecast = tfm.forecast(
+                horizon=NUM_FORECAST_HORIZONS,
+                inputs=[context],
             )
-            point_forecast = np.array(forecast_output[0][0], dtype=np.float32)
+            # point_forecast shape: (1, horizon)
+            tfm_pred = point_forecast[0].astype(np.float32)
 
-            # Map to our 60 monthly horizons
-            if len(point_forecast) >= NUM_FORECAST_HORIZONS:
-                tfm_pred = point_forecast[:NUM_FORECAST_HORIZONS]
+            if len(tfm_pred) < NUM_FORECAST_HORIZONS:
+                pad = np.full(NUM_FORECAST_HORIZONS - len(tfm_pred),
+                              tfm_pred[-1], dtype=np.float32)
+                tfm_pred = np.concatenate([tfm_pred, pad])
             else:
-                pad = np.full(NUM_FORECAST_HORIZONS - len(point_forecast),
-                              point_forecast[-1])
-                tfm_pred = np.concatenate([point_forecast, pad])
+                tfm_pred = tfm_pred[:NUM_FORECAST_HORIZONS]
 
         except Exception as e:
             tqdm.write(f"  Warning: TimesFM failed for {wid}: {e}")
