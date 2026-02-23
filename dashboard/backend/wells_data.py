@@ -67,12 +67,13 @@ def _build_summary():
         # Compute simple CFI from actual values
         from src.cfi import compute_cfi, cfi_label as get_cfi_label
         cause_probs = [1.0 / 6] * 6
-        cfi_val = float(compute_cfi(
+        cfi_arr = compute_cfi(
             last_row.get("RUL_days", 500),
             last_row.get("Corrosion_Rate_mpy", 1.0),
             thickness_loss_pct,
-            [cause_probs],
-        ))
+            cause_probs,
+        )
+        cfi_val = float(np.atleast_1d(cfi_arr).flat[0])
 
         summaries.append({
             "well_id": wid,
