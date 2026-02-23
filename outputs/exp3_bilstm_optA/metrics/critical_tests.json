@@ -1,0 +1,98 @@
+[
+  {
+    "id": "TEST-11",
+    "spec": "S1",
+    "description": "Inference < 500ms per sample",
+    "passed": true,
+    "value": 0.024,
+    "threshold": 500
+  },
+  {
+    "id": "TEST-12",
+    "spec": "S2",
+    "description": "Corrosion Rate NMAE < 5%",
+    "passed": false,
+    "value": 100.0,
+    "threshold": 5.0
+  },
+  {
+    "id": "TEST-13",
+    "spec": "IS1",
+    "description": "WT loss detection accuracy >= 90%",
+    "passed": true,
+    "value": 0.9691659929938022,
+    "threshold": 0.9
+  },
+  {
+    "id": "TEST-14",
+    "spec": "IS3",
+    "description": "95% CI Coverage >= 85%",
+    "passed": true,
+    "value": 0.9619779035300459,
+    "threshold": 0.85
+  },
+  {
+    "id": "TEST-15",
+    "spec": "-",
+    "description": "RUL MAE < 60 days",
+    "passed": true,
+    "value": 7.2984490394592285,
+    "threshold": 60
+  },
+  {
+    "id": "TEST-16",
+    "spec": "-",
+    "description": "RUL R\u00b2 > 0.50",
+    "passed": true,
+    "value": 0.671432375907898,
+    "threshold": 0.5
+  },
+  {
+    "id": "TEST-17",
+    "spec": "-",
+    "description": "Wall Thickness MAE < 0.5 mm",
+    "passed": true,
+    "value": 0.24153906106948853,
+    "threshold": 0.5
+  },
+  {
+    "id": "TEST-18",
+    "spec": "-",
+    "description": "RUL MAE beats NaiveBaseline",
+    "passed": true,
+    "value": 7.2984490394592285,
+    "threshold": 315.90924072265625
+  },
+  {
+    "id": "TEST-19",
+    "spec": "-",
+    "description": "Training converged (best epoch > 5)",
+    "passed": true,
+    "value": 63,
+    "threshold": 5
+  },
+  {
+    "id": "TEST-20",
+    "spec": "-",
+    "description": "RUL RMSE < 80 days",
+    "passed": true,
+    "value": 44.091983708421985,
+    "threshold": 80
+  },
+  {
+    "id": "TEST-21",
+    "spec": "-",
+    "description": "Corrosion Rate R\u00b2 > 0.30",
+    "passed": false,
+    "value": -0.14777100086212158,
+    "threshold": 0.3
+  },
+  {
+    "id": "TEST-22",
+    "spec": "-",
+    "description": "Forecast avg MAE < 1.5 mm",
+    "passed": true,
+    "value": 0.6975909615556399,
+    "threshold": 1.5
+  }
+]

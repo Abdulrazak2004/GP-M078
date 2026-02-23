@@ -1,0 +1,8 @@
+{
+  "single_sample_ms": 1.413,
+  "batch_ms": 0.717,
+  "batch_size": 256,
+  "total_samples": 110544,
+  "total_test_ms": 2715.477,
+  "ms_per_sample": 0.025
+}

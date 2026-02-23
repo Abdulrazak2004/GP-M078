@@ -1,0 +1,98 @@
+[
+  {
+    "id": "TEST-11",
+    "spec": "S1",
+    "description": "Inference < 500ms per sample",
+    "passed": true,
+    "value": 0.023,
+    "threshold": 500
+  },
+  {
+    "id": "TEST-12",
+    "spec": "S2",
+    "description": "Corrosion Rate MAPE < 5%",
+    "passed": false,
+    "value": 364.7494201660156,
+    "threshold": 5.0
+  },
+  {
+    "id": "TEST-13",
+    "spec": "IS1",
+    "description": "WT loss detection accuracy >= 90%",
+    "passed": false,
+    "value": 0.8885037550548815,
+    "threshold": 0.9
+  },
+  {
+    "id": "TEST-14",
+    "spec": "IS3",
+    "description": "95% CI Coverage >= 85%",
+    "passed": true,
+    "value": 0.9292677642980935,
+    "threshold": 0.85
+  },
+  {
+    "id": "TEST-15",
+    "spec": "-",
+    "description": "RUL MAE < 60 days",
+    "passed": true,
+    "value": 15.841429710388184,
+    "threshold": 60
+  },
+  {
+    "id": "TEST-16",
+    "spec": "-",
+    "description": "RUL R\u00b2 > 0.50",
+    "passed": false,
+    "value": 0.3554784059524536,
+    "threshold": 0.5
+  },
+  {
+    "id": "TEST-17",
+    "spec": "-",
+    "description": "Wall Thickness MAE < 0.5 mm",
+    "passed": false,
+    "value": 1.1603357791900635,
+    "threshold": 0.5
+  },
+  {
+    "id": "TEST-18",
+    "spec": "-",
+    "description": "RUL MAE beats NaiveBaseline",
+    "passed": true,
+    "value": 15.841429710388184,
+    "threshold": 280.971435546875
+  },
+  {
+    "id": "TEST-19",
+    "spec": "-",
+    "description": "Training converged (best epoch > 5)",
+    "passed": false,
+    "value": 4,
+    "threshold": 5
+  },
+  {
+    "id": "TEST-20",
+    "spec": "-",
+    "description": "RUL RMSE < 80 days",
+    "passed": true,
+    "value": 64.04412465124143,
+    "threshold": 80
+  },
+  {
+    "id": "TEST-21",
+    "spec": "-",
+    "description": "Corrosion Rate R\u00b2 > 0.30",
+    "passed": false,
+    "value": 0.27712661027908325,
+    "threshold": 0.3
+  },
+  {
+    "id": "TEST-22",
+    "spec": "-",
+    "description": "Forecast avg MAE < 1.5 mm",
+    "passed": false,
+    "value": 1.5362761517365773,
+    "threshold": 1.5
+  }
+]

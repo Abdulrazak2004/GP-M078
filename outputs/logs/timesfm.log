@@ -1,0 +1,12 @@
+Using GPU: NVIDIA GeForce RTX 4090 (physical GPU 1)
+
+=== TimesFM Experiment ===
+Traceback (most recent call last):
+  File "/workspace/GP/run_experiment.py", line 120, in <module>
+    main()
+  File "/workspace/GP/run_experiment.py", line 56, in main
+    results = run_timesfm_experiment(output_dir, device)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/GP/src/timesfm_experiment.py", line 53, in run_timesfm_experiment
+    import timesfm
+ModuleNotFoundError: No module named 'timesfm'
