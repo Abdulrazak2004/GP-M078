@@ -435,6 +435,17 @@ def run_critical_tests(metrics, mc_results, baseline_metrics, training_info,
         "threshold": 1.5,
     })
 
+    # TEST-23: Spec IS4 — CFI outputs 0-100 range
+    cfi_min = metrics.get("cfi_min", -1)
+    cfi_max = metrics.get("cfi_max", 101)
+    tests.append({
+        "id": "TEST-23", "spec": "IS4",
+        "description": "CFI outputs in [0, 100] range",
+        "passed": cfi_min >= 0.0 and cfi_max <= 100.0,
+        "value": f"{cfi_min:.1f}-{cfi_max:.1f}",
+        "threshold": "0-100",
+    })
+
     return tests
 
 
@@ -742,7 +753,50 @@ def generate_plots(det_results, mc_results, metrics, baseline_results,
     fig.savefig(plot_dir / "plot12_cr_residuals.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"  Saved 12 plots to {plot_dir}")
+    # PLOT-13: CFI Distribution
+    if "cfi" in det_results:
+        cfi = det_results["cfi"]
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Histogram with risk zone coloring
+        ax = axes[0]
+        bins = np.linspace(0, 100, 51)
+        n, _, patches = ax.hist(cfi, bins=bins, edgecolor="k", alpha=0.8)
+        for patch, left_edge in zip(patches, bins[:-1]):
+            if left_edge < 25:
+                patch.set_facecolor("#2ecc71")  # green
+            elif left_edge < 50:
+                patch.set_facecolor("#f1c40f")  # yellow
+            elif left_edge < 75:
+                patch.set_facecolor("#e67e22")  # orange
+            else:
+                patch.set_facecolor("#e74c3c")  # red
+        ax.set_xlabel("Corrosion Failure Index (CFI)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"CFI Distribution — {exp_name}")
+        ax.axvline(np.mean(cfi), color="k", linestyle="--", alpha=0.7,
+                    label=f"Mean={np.mean(cfi):.1f}")
+        ax.legend()
+
+        # Pie chart of risk categories
+        ax2 = axes[1]
+        labels_list = [cfi_label(v) for v in cfi]
+        categories = ["Green (Safe)", "Yellow (Watch)", "Orange (Elevated)", "Red (Critical)"]
+        colors = ["#2ecc71", "#f1c40f", "#e67e22", "#e74c3c"]
+        counts = [sum(1 for l in labels_list if l == cat) for cat in categories]
+        nonzero = [(cat, cnt, col) for cat, cnt, col in zip(categories, counts, colors) if cnt > 0]
+        if nonzero:
+            ax2.pie([c for _, c, _ in nonzero],
+                    labels=[f"{cat}\n({cnt:,})" for cat, cnt, _ in nonzero],
+                    colors=[col for _, _, col in nonzero],
+                    autopct="%1.1f%%", startangle=90)
+        ax2.set_title(f"CFI Risk Categories — {exp_name}")
+
+        plt.tight_layout()
+        fig.savefig(plot_dir / "plot13_cfi_distribution.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"  Saved plots to {plot_dir}")
 
 
 def _save_placeholder(path, title):
@@ -794,9 +848,42 @@ def evaluate_experiment(model, data, device, output_dir, exp_name,
     print(f"[{exp_name}] MC Dropout inference ({MC_DROPOUT_SAMPLES} samples)...")
     mc_results = predict_mc_dropout(model, test_loader, device)
 
+    # Compute CFI (Corrosion Failure Index) — IS4
+    print(f"[{exp_name}] Computing Corrosion Failure Index (CFI)...")
+    nominal_wt = 11.0  # approximate nominal initial thickness
+    pred_loss_pct = (nominal_wt - det_results["wt"]) / nominal_wt * 100
+    pred_loss_pct = np.clip(pred_loss_pct, 0, 100)
+    # Use uniform cause probs (cause classifier not integrated)
+    n_samples = len(det_results["rul"])
+    uniform_cause = np.full((n_samples, 6), 1.0 / 6.0)
+    cfi_scores = compute_cfi(
+        det_results["rul"], det_results["cr"], pred_loss_pct, uniform_cause
+    )
+    det_results["cfi"] = cfi_scores
+
     # Metrics
     print(f"[{exp_name}] Computing metrics...")
     metrics = compute_metrics(det_results, mc_results)
+
+    # CFI stats
+    cfi = det_results["cfi"]
+    metrics["cfi_mean"] = float(np.mean(cfi))
+    metrics["cfi_median"] = float(np.median(cfi))
+    metrics["cfi_std"] = float(np.std(cfi))
+    metrics["cfi_min"] = float(np.min(cfi))
+    metrics["cfi_max"] = float(np.max(cfi))
+    cfi_labels = [cfi_label(v) for v in cfi]
+    for cat in ["Green (Safe)", "Yellow (Watch)", "Orange (Elevated)", "Red (Critical)"]:
+        metrics[f"cfi_pct_{cat.split()[0].lower()}"] = float(
+            sum(1 for l in cfi_labels if l == cat) / len(cfi_labels) * 100
+        )
+    print(f"[{exp_name}] CFI: mean={metrics['cfi_mean']:.1f}, "
+          f"median={metrics['cfi_median']:.1f}, range=[{metrics['cfi_min']:.1f}, {metrics['cfi_max']:.1f}]")
+    print(f"[{exp_name}] CFI distribution: "
+          f"Green={metrics['cfi_pct_green']:.1f}% | "
+          f"Yellow={metrics['cfi_pct_yellow']:.1f}% | "
+          f"Orange={metrics['cfi_pct_orange']:.1f}% | "
+          f"Red={metrics['cfi_pct_red']:.1f}%")
 
     # Naive Baseline
     print(f"[{exp_name}] Running NaiveBaseline...")
