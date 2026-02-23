@@ -21,10 +21,17 @@ def main():
                         help="GPU index (default: 0)")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Override output directory")
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="Override number of epochs (e.g. 2 for stress test)")
     args = parser.parse_args()
 
     # Set CUDA device BEFORE importing torch
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+
+    # Override epochs if specified (must happen before importing train)
+    if args.epochs is not None:
+        import src.config
+        src.config.EPOCHS = args.epochs
 
     import torch
     from src.config import EXPERIMENTS, OUTPUT_DIR, BATCH_SIZE, NUM_WORKERS

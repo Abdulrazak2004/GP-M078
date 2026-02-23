@@ -29,8 +29,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import src.config as cfg
 from src.config import (
-    BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY, EPOCHS,
+    BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY,
     EARLY_STOP_PATIENCE, WARMUP_EPOCHS,
     GRAD_CLIP_NORM, RANDOM_SEED,
     EXPERIMENTS, FEATURES_A, FEATURES_B, NUM_WORKERS, N_CV_FOLDS,
@@ -198,7 +199,7 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
     best_val_loss, best_epoch, history
     """
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    scheduler = build_scheduler(optimizer, EPOCHS, WARMUP_EPOCHS)
+    scheduler = build_scheduler(optimizer, cfg.EPOCHS, WARMUP_EPOCHS)
 
     # AMP — only on CUDA (not MPS/CPU)
     use_amp = USE_AMP and device.type == "cuda"
@@ -217,7 +218,7 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
     best_epoch = 0
     patience_counter = 0
 
-    epoch_pbar = tqdm(range(1, EPOCHS + 1), desc=tag,
+    epoch_pbar = tqdm(range(1, cfg.EPOCHS + 1), desc=tag,
                       bar_format="{l_bar}{bar:25}{r_bar}")
     for epoch in epoch_pbar:
         train_losses = train_one_epoch(
@@ -250,7 +251,7 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
 
         if epoch % 10 == 0 or epoch == 1:
             tqdm.write(
-                f"{tag} Epoch {epoch:3d}/{EPOCHS} | "
+                f"{tag} Epoch {epoch:3d}/{cfg.EPOCHS} | "
                 f"Train: {train_losses['total']:.4f} | "
                 f"Val: {val_losses['total']:.4f} | "
                 f"MAE_RUL: {mae_rul:.1f} | "
