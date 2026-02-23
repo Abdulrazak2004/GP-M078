@@ -16,6 +16,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -50,14 +52,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend dev server
+# CORS — allow frontend dev server + any origin for deployed instances
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Serve built frontend (production) ────────────────────────────────────────
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="static-assets")
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -172,3 +179,15 @@ def design_well(req: DesignWellRequest):
     result = predict_design_well(params)
 
     return result
+
+
+# ─── SPA catch-all: serve index.html for non-API routes ──────────────────────
+@app.get("/{full_path:path}")
+def serve_spa(full_path: str):
+    """Serve the React SPA for any non-API route."""
+    if FRONTEND_DIST.exists():
+        file_path = FRONTEND_DIST / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(FRONTEND_DIST / "index.html")
+    return {"message": "Frontend not built. Run: cd frontend && npm run build"}
