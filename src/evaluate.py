@@ -289,8 +289,8 @@ def run_naive_baseline(test_loader, feature_cols):
 
     all_X, all_rul = [], []
     for batch in test_loader:
-        X = batch[0].numpy()
-        y_rul = batch[1].numpy()
+        X = batch[0].cpu().numpy()
+        y_rul = batch[1].cpu().numpy()
         all_X.append(X)
         all_rul.append(y_rul)
 
