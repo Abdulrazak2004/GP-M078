@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+/* ── Palantir Blueprint Design System Theme ── */
+@theme {
+  --color-bg-primary: #111418;
+  --color-bg-surface: #1C2127;
+  --color-bg-elevated: #252A31;
+  --color-bg-border: #2F343C;
+  --color-bg-muted: #383E47;
+
+  --color-text-primary: #F6F7F9;
+  --color-text-secondary: #ABB3BF;
+  --color-text-muted: #5F6B7C;
+
+  --color-accent-blue: #4C90F0;
+  --color-accent-green: #32A467;
+  --color-accent-orange: #EC9A3C;
+  --color-accent-red: #E76A6E;
+  --color-accent-cyan: #68D4F8;
+
+  --color-cfi-green: #32A467;
+  --color-cfi-yellow: #FBD065;
+  --color-cfi-orange: #EC9A3C;
+  --color-cfi-red: #E76A6E;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+}
+
+/* ── Base ── */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-muted);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* ── Pulsing marker animation ── */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+.pulse-marker {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+/* ── Glow effects ── */
+.glow-red {
+  box-shadow: 0 0 20px rgba(231, 106, 110, 0.3);
+}
+.glow-orange {
+  box-shadow: 0 0 20px rgba(236, 154, 60, 0.3);
+}
+.glow-yellow {
+  box-shadow: 0 0 15px rgba(251, 208, 101, 0.2);
+}
+.glow-green {
+  box-shadow: 0 0 15px rgba(50, 164, 103, 0.2);
+}
+.glow-blue {
+  box-shadow: 0 0 15px rgba(76, 144, 240, 0.2);
+}
+
+/* ── Glassmorphism ── */
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(28, 33, 39, 0.8);
+}
+
+/* ── Leaflet overrides for dark theme ── */
+.leaflet-container {
+  background: #111418 !important;
+}
+.leaflet-control-zoom a {
+  background: var(--color-bg-surface) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-bg-border) !important;
+}
+.leaflet-control-attribution {
+  background: rgba(17, 20, 24, 0.8) !important;
+  color: var(--color-text-muted) !important;
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a {
+  color: var(--color-text-muted) !important;
+}
+.leaflet-popup-content-wrapper {
+  background: var(--color-bg-surface) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--color-bg-border) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+.leaflet-popup-tip {
+  background: var(--color-bg-surface) !important;
+}
+
+/* ── Number formatting ── */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Fade-in animation ── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+/* ── Slide-in panel ── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in {
+  animation: slide-in-right 0.3s ease-out;
+}
