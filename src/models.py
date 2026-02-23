@@ -28,7 +28,9 @@ from src.config import (
     DROPOUT_LSTM, DROPOUT_BILSTM, DROPOUT_HEAD,
     CNN_FILTERS_1, CNN_FILTERS_2, CNN_KERNEL,
     NUM_FORECAST_HORIZONS,
-    RUL_CAP,
+    RUL_CAP, WINDOW_SIZE,
+    TRANSFORMER_D_MODEL, TRANSFORMER_NHEAD,
+    TRANSFORMER_LAYERS, TRANSFORMER_DROPOUT,
 )
 
 
@@ -39,6 +41,7 @@ from src.config import (
 class MultiTaskHeads(nn.Module):
     """Four task-specific output heads fed from a shared feature vector.
 
+    Fixed head dims (32) to keep heads lightweight — backbone does the heavy lifting.
     Cause classification is trained separately — not part of this model.
     """
 
@@ -49,6 +52,7 @@ class MultiTaskHeads(nn.Module):
         self.head_rul = nn.Sequential(
             nn.Linear(input_dim, 32),
             nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
         )
 
@@ -56,6 +60,7 @@ class MultiTaskHeads(nn.Module):
         self.head_cr = nn.Sequential(
             nn.Linear(input_dim, 32),
             nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
             nn.ReLU(),  # rate >= 0
         )
@@ -64,6 +69,7 @@ class MultiTaskHeads(nn.Module):
         self.head_wt = nn.Sequential(
             nn.Linear(input_dim, 32),
             nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
             nn.ReLU(),  # thickness >= 0
         )
@@ -72,6 +78,7 @@ class MultiTaskHeads(nn.Module):
         self.head_forecast = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
             nn.Linear(64, NUM_FORECAST_HORIZONS),
             nn.ReLU(),  # thickness >= 0
         )
@@ -159,7 +166,7 @@ class NaiveBaseline:
 
 class SimpleLSTM(nn.Module):
     """
-    Two-layer stacked LSTM → shared features → multi-task heads.
+    Two-layer stacked LSTM with LayerNorm → multi-task heads.
     """
 
     def __init__(self, n_features, hidden1=LSTM_HIDDEN_1,
@@ -167,8 +174,10 @@ class SimpleLSTM(nn.Module):
         super().__init__()
 
         self.lstm1 = nn.LSTM(n_features, hidden1, batch_first=True)
+        self.norm1 = nn.LayerNorm(hidden1)
         self.drop1 = nn.Dropout(dropout)
         self.lstm2 = nn.LSTM(hidden1, hidden2, batch_first=True)
+        self.norm2 = nn.LayerNorm(hidden2)
         self.drop2 = nn.Dropout(dropout)
 
         self.heads = MultiTaskHeads(hidden2)
@@ -176,9 +185,9 @@ class SimpleLSTM(nn.Module):
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
         out, _ = self.lstm1(x)
-        out = self.drop1(out)
+        out = self.drop1(self.norm1(out))
         out, _ = self.lstm2(out)
-        out = self.drop2(out)
+        out = self.drop2(self.norm2(out))
 
         # Take last timestep
         features = out[:, -1, :]  # (B, hidden2)
@@ -191,7 +200,7 @@ class SimpleLSTM(nn.Module):
 
 class BiLSTMAttention(nn.Module):
     """
-    Two-layer Bidirectional LSTM + Temporal Attention → multi-task heads.
+    Two-layer Bidirectional LSTM + LayerNorm + Temporal Attention → multi-task heads.
     """
 
     def __init__(self, n_features, hidden1=LSTM_HIDDEN_1,
@@ -200,9 +209,11 @@ class BiLSTMAttention(nn.Module):
 
         self.lstm1 = nn.LSTM(n_features, hidden1, batch_first=True,
                              bidirectional=True)
+        self.norm1 = nn.LayerNorm(hidden1 * 2)
         self.drop1 = nn.Dropout(dropout)
         self.lstm2 = nn.LSTM(hidden1 * 2, hidden2, batch_first=True,
                              bidirectional=True)
+        self.norm2 = nn.LayerNorm(hidden2 * 2)
         self.drop2 = nn.Dropout(dropout)
 
         # Attention over timesteps (hidden2 * 2 due to bidirectional)
@@ -216,9 +227,9 @@ class BiLSTMAttention(nn.Module):
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
         out, _ = self.lstm1(x)
-        out = self.drop1(out)
+        out = self.drop1(self.norm1(out))
         out, _ = self.lstm2(out)
-        out = self.drop2(out)
+        out = self.drop2(self.norm2(out))
 
         # Attention-weighted sum over timesteps
         features, self._attn_weights = self.attention(out)  # (B, hidden2*2)
@@ -238,10 +249,12 @@ class BiLSTMAttention(nn.Module):
 
 class CNNLSTM(nn.Module):
     """
-    Conv1D feature extraction → LSTM → multi-task heads.
+    Conv1D → LSTM → multi-task heads, with CNN skip connection for CR head.
 
     CNN captures local patterns (short-term trends),
     LSTM captures longer temporal dependencies.
+    CR head gets direct CNN features (skip connection) because corrosion rate
+    is a derivative — LSTM pooling smooths out the high-frequency gradient signal.
     """
 
     def __init__(self, n_features, cnn1=CNN_FILTERS_1, cnn2=CNN_FILTERS_2,
@@ -250,31 +263,116 @@ class CNNLSTM(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv1d(n_features, cnn1, kernel_size=kernel, padding=0)
+        self.bn1 = nn.BatchNorm1d(cnn1)
         self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv1d(cnn1, cnn2, kernel_size=kernel, padding=0)
+        self.bn2 = nn.BatchNorm1d(cnn2)
         self.relu2 = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2)
 
+        # CNN output length after conv+pool: (window - 4) // 2
+        # For window=30: (30-4)//2 = 13 timesteps × cnn2 channels
+        self.cnn_out_len = None  # set dynamically in forward
+
         self.lstm = nn.LSTM(cnn2, lstm_hidden, batch_first=True)
+        self.norm = nn.LayerNorm(lstm_hidden)
         self.drop = nn.Dropout(dropout)
 
+        # Standard heads for RUL, WT, Forecast
         self.heads = MultiTaskHeads(lstm_hidden)
+
+        # CR skip connection: CNN features (flattened last timestep) + LSTM → CR head
+        # Uses last CNN timestep (cnn2 dims) concatenated with LSTM hidden
+        cr_input_dim = lstm_hidden + cnn2
+        self.head_cr_skip = nn.Sequential(
+            nn.Linear(cr_input_dim, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, 1),
+            nn.ReLU(),  # rate >= 0
+        )
 
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
         # Conv1d expects (B, C, L) — transpose from (B, L, C)
-        out = x.transpose(1, 2)              # (B, n_features, window)
-        out = self.relu1(self.conv1(out))     # (B, cnn1, window-2)
-        out = self.relu2(self.conv2(out))     # (B, cnn2, window-4)
-        out = self.pool(out)                  # (B, cnn2, (window-4)//2)
+        out = x.transpose(1, 2)                        # (B, n_features, window)
+        out = self.relu1(self.bn1(self.conv1(out)))     # (B, cnn1, window-2)
+        out = self.relu2(self.bn2(self.conv2(out)))     # (B, cnn2, window-4)
+        cnn_features = self.pool(out)                   # (B, cnn2, (window-4)//2)
+
+        # Save CNN last timestep for CR skip connection
+        cnn_last = cnn_features[:, :, -1]               # (B, cnn2)
 
         # Back to (B, L, C) for LSTM
-        out = out.transpose(1, 2)
+        out = cnn_features.transpose(1, 2)
         out, _ = self.lstm(out)
-        out = self.drop(out)
+        out = self.drop(self.norm(out))
 
         # Take last timestep
-        features = out[:, -1, :]             # (B, lstm_hidden)
+        lstm_features = out[:, -1, :]                   # (B, lstm_hidden)
+
+        # Standard heads (RUL, WT, Forecast use LSTM features)
+        preds = self.heads(lstm_features)
+
+        # Override CR with skip-connected head
+        cr_input = torch.cat([lstm_features, cnn_last], dim=-1)  # (B, lstm_hidden + cnn2)
+        preds["cr"] = self.head_cr_skip(cr_input).squeeze(-1)
+
+        return preds
+
+
+# ============================================================================
+# MODEL 4: TRANSFORMER
+# ============================================================================
+
+class TransformerBackbone(nn.Module):
+    """
+    Transformer encoder with learnable positional embeddings → multi-task heads.
+
+    Linear projection → positional embedding → TransformerEncoder → mean pool.
+    """
+
+    def __init__(self, n_features, d_model=TRANSFORMER_D_MODEL,
+                 nhead=TRANSFORMER_NHEAD, num_layers=TRANSFORMER_LAYERS,
+                 dropout=TRANSFORMER_DROPOUT, max_len=WINDOW_SIZE):
+        super().__init__()
+
+        # Linear projection: n_features → d_model
+        self.input_proj = nn.Linear(n_features, d_model)
+
+        # Learnable positional embedding (fixed window size)
+        self.pos_embed = nn.Parameter(torch.randn(1, max_len, d_model) * 0.02)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,  # Pre-LN — more stable for deeper models
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.norm = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+
+        self.heads = MultiTaskHeads(d_model)
+
+    def forward(self, x):
+        """x: (batch, window, n_features) → dict of predictions"""
+        seq_len = x.size(1)
+
+        # Project + add positional embeddings
+        out = self.input_proj(x) + self.pos_embed[:, :seq_len, :]
+
+        # Transformer encoder
+        out = self.encoder(out)  # (B, L, d_model)
+
+        # Global average pooling over timesteps
+        features = self.norm(out.mean(dim=1))  # (B, d_model)
+        features = self.drop(features)
+
         return self.heads(features)
 
 
@@ -301,6 +399,7 @@ def build_model(name, n_features):
         "SimpleLSTM": SimpleLSTM,
         "BiLSTMAttention": BiLSTMAttention,
         "CNNLSTM": CNNLSTM,
+        "TransformerBackbone": TransformerBackbone,
     }
     if name not in models:
         raise ValueError(f"Unknown model: {name}. Choose from {list(models.keys())}")

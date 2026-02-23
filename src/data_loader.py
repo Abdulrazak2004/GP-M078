@@ -23,7 +23,7 @@ from tqdm import tqdm
 from src.config import (
     DATASET_PATH, SCALER_DIR, RANDOM_SEED,
     RUL_CAP, WINDOW_SIZE, STRIDE,
-    FEATURES_A, FEATURES_B, BINARY_FEATURES,
+    FEATURES_A, FEATURES_B, BINARY_FEATURES, ENGINEERED_FEATURES,
     TARGET_RUL, TARGET_CR, TARGET_WT, TARGET_CAUSE,
     FORECAST_HORIZONS, NUM_FORECAST_HORIZONS,
     TRAIN_RATIO, VAL_RATIO, TEST_RATIO,
@@ -42,6 +42,54 @@ def load_dataset(path=None):
 
     # Cap RUL at RUL_CAP
     df[TARGET_RUL] = df[TARGET_RUL].clip(upper=RUL_CAP)
+
+    return df
+
+
+def engineer_features(df):
+    """
+    Compute per-well engineered features BEFORE scaling.
+
+    Uses groupby('Well_ID').transform() to prevent cross-well leakage.
+    Must be called after load_dataset() and before any splitting/scaling.
+
+    Adds 6 columns: Thickness_RollMean_7d, Thickness_RollStd_7d,
+    Thickness_Slope_7d, Pressure_Delta_7d, Thickness_Pct_Initial,
+    Cumulative_Damage.
+    """
+    # Sort by Well_ID + Day to ensure correct rolling order
+    df = df.sort_values(["Well_ID", "Day"]).reset_index(drop=True)
+    grouped = df.groupby("Well_ID")
+
+    # Rolling statistics on Current_Thickness_mm (7-day window)
+    df["Thickness_RollMean_7d"] = grouped["Current_Thickness_mm"].transform(
+        lambda s: s.rolling(7, min_periods=1).mean()
+    )
+    df["Thickness_RollStd_7d"] = grouped["Current_Thickness_mm"].transform(
+        lambda s: s.rolling(7, min_periods=1).std().fillna(0)
+    )
+
+    # Thickness slope: diff(7) / 7 — degradation rate (mm/day)
+    df["Thickness_Slope_7d"] = grouped["Current_Thickness_mm"].transform(
+        lambda s: s.diff(7) / 7.0
+    )
+
+    # Pressure change over 7 days
+    df["Pressure_Delta_7d"] = grouped["Pressure_psi"].transform(
+        lambda s: s.diff(7)
+    )
+
+    # Per-well relative thickness (Improvement 4: per-well normalization)
+    df["Thickness_Pct_Initial"] = df["Current_Thickness_mm"] / df["Initial_Thickness_mm"]
+    df["Cumulative_Damage"] = 1.0 - df["Thickness_Pct_Initial"]
+
+    # Backfill NaNs from rolling/diff (first 6 rows per well)
+    grouped = df.groupby("Well_ID")  # re-group to include new columns
+    for col in ENGINEERED_FEATURES:
+        df[col] = grouped[col].transform(lambda s: s.bfill().ffill())
+
+    # Safety: any remaining NaN → 0
+    df[ENGINEERED_FEATURES] = df[ENGINEERED_FEATURES].fillna(0)
 
     return df
 

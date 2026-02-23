@@ -56,6 +56,16 @@ META_COLS = [
     "Reservoir_Type", "Casing_Grade", "Casing_OD_in", "Initial_Thickness_mm",
 ]
 
+# Engineered features (computed per-well before scaling)
+ENGINEERED_FEATURES = [
+    "Thickness_RollMean_7d",
+    "Thickness_RollStd_7d",
+    "Thickness_Slope_7d",
+    "Pressure_Delta_7d",
+    "Thickness_Pct_Initial",
+    "Cumulative_Damage",
+]
+
 # Option A — realistic (no corrosion rate, no thickness loss pct)
 FEATURES_A = [
     "Status",
@@ -72,10 +82,10 @@ FEATURES_A = [
     "Viscosity_cP",
     "Current_Thickness_mm",
     "Inhibitor_Active",
-]  # 14 features
+] + ENGINEERED_FEATURES  # 14 raw + 6 engineered = 20 features
 
 # Option B — cheating baseline (adds corrosion rate)
-FEATURES_B = FEATURES_A + ["Corrosion_Rate_mpy"]  # 15 features
+FEATURES_B = FEATURES_A + ["Corrosion_Rate_mpy"]  # 21 features
 
 # Binary features (not scaled)
 BINARY_FEATURES = ["Status", "Inhibitor_Active"]
@@ -92,25 +102,38 @@ NUM_CAUSE_CLASSES = 6
 # ---------------------------------------------------------------------------
 # Model architecture
 # ---------------------------------------------------------------------------
-LSTM_HIDDEN_1 = 64
-LSTM_HIDDEN_2 = 32
-DROPOUT_LSTM = 0.3
-DROPOUT_BILSTM = 0.4
-DROPOUT_HEAD = 0.3
+LSTM_HIDDEN_1 = 128   # right-sized for ~100K training windows
+LSTM_HIDDEN_2 = 64
+DROPOUT_LSTM = 0.2
+DROPOUT_BILSTM = 0.3
+DROPOUT_HEAD = 0.2
 CNN_FILTERS_1 = 32
 CNN_FILTERS_2 = 64
 CNN_KERNEL = 3
+NUM_RAW_FEATURES = 14  # first 14 cols in FEATURES_A are raw sensors
+
+# Transformer
+TRANSFORMER_D_MODEL = 128
+TRANSFORMER_NHEAD = 4
+TRANSFORMER_LAYERS = 3      # literature says 2-3 is optimal
+TRANSFORMER_DROPOUT = 0.2
 
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 BATCH_SIZE = 128
 LEARNING_RATE = 5e-4
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-4   # lighter regularization for right-sized models
 EPOCHS = 100
-EARLY_STOP_PATIENCE = 20
-LR_REDUCE_PATIENCE = 7
-LR_REDUCE_FACTOR = 0.5
+EARLY_STOP_PATIENCE = 30  # was 20 — give cosine schedule time to work
+WARMUP_EPOCHS = 5         # linear LR warmup before cosine decay
+
+# Data augmentation (training only)
+AUGMENT_NOISE_STD = 0.01   # Gaussian jitter σ
+AUGMENT_SCALE_RANGE = 0.05 # random magnitude scaling ±5%
+
+# Mixed precision (AMP) — ~2x speedup on RTX 4090
+USE_AMP = True
 GRAD_CLIP_NORM = 1.0
 HUBER_DELTA_RUL = 20.0
 HUBER_DELTA_CR = 3.0
@@ -172,5 +195,11 @@ EXPERIMENTS = {
         "features": "A",
         "window_size": 15,
         "description": "Window size ablation (15)",
+    },
+    "exp6_transformer_optA": {
+        "backbone": "TransformerBackbone",
+        "features": "A",
+        "window_size": 30,
+        "description": "Transformer self-attention (new)",
     },
 }

@@ -1,11 +1,11 @@
 """
-Multi-task weighted loss for the Casing RUL Prediction pipeline.
+Multi-task loss for the Casing RUL Prediction pipeline.
 
-Combines:
-  - Huber loss for RUL, Corrosion Rate, Wall Thickness, Forecast (regression)
-  - Configurable per-task weights
+Implements Homoscedastic Task Uncertainty Weighting (Kendall et al., 2018):
+    L_total = sum_i (1/(2*sigma_i^2) * L_i + log(sigma_i))
 
-Cause classification is trained as a separate model — not included here.
+Each task learns its own variance (sigma) dynamically, so the model
+automatically balances tasks with different scales (RUL ~500d vs CR ~10mpy).
 
 Forecast loss ignores NaN targets (samples where look-ahead data is unavailable).
 """
@@ -15,34 +15,33 @@ import torch.nn as nn
 
 from src.config import (
     HUBER_DELTA_RUL, HUBER_DELTA_CR, HUBER_DELTA_WT, HUBER_DELTA_FORECAST,
-    LOSS_WEIGHT_RUL, LOSS_WEIGHT_CR, LOSS_WEIGHT_WT,
-    LOSS_WEIGHT_FORECAST,
 )
 
 
 class MultiTaskLoss(nn.Module):
     """
-    Weighted multi-task loss combining 4 regression objectives.
+    Uncertainty-weighted multi-task loss (Kendall et al., 2018).
 
-    Call signature matches model output dict + target tensors from CasingDataset.
+    Learns a log-variance parameter per task. The loss for task i is:
+        1/(2*exp(log_var_i)) * L_i + log_var_i / 2
+
+    This automatically down-weights noisy tasks and up-weights clean ones.
     """
 
-    def __init__(self,
-                 w_rul=LOSS_WEIGHT_RUL,
-                 w_cr=LOSS_WEIGHT_CR,
-                 w_wt=LOSS_WEIGHT_WT,
-                 w_forecast=LOSS_WEIGHT_FORECAST):
+    def __init__(self):
         super().__init__()
-
-        self.w_rul = w_rul
-        self.w_cr = w_cr
-        self.w_wt = w_wt
-        self.w_forecast = w_forecast
 
         self.huber_rul = nn.HuberLoss(delta=HUBER_DELTA_RUL)
         self.huber_cr = nn.HuberLoss(delta=HUBER_DELTA_CR)
         self.huber_wt = nn.HuberLoss(delta=HUBER_DELTA_WT)
         self.huber_forecast = nn.HuberLoss(delta=HUBER_DELTA_FORECAST, reduction="none")
+
+        # Learnable log-variance per task (initialized so initial weight ≈ 1.0)
+        # log_var = 0 → sigma^2 = 1 → weight = 1/(2*1) = 0.5
+        self.log_var_rul = nn.Parameter(torch.zeros(1))
+        self.log_var_cr = nn.Parameter(torch.zeros(1))
+        self.log_var_wt = nn.Parameter(torch.zeros(1))
+        self.log_var_forecast = nn.Parameter(torch.zeros(1))
 
     def forward(self, preds, y_rul, y_cr, y_wt, y_forecast):
         """
@@ -72,11 +71,14 @@ class MultiTaskLoss(nn.Module):
         else:
             loss_forecast = torch.tensor(0.0, device=preds["rul"].device)
 
+        # Kendall uncertainty weighting: 1/(2*sigma^2) * L + log(sigma)
+        # Using log_var = log(sigma^2), so sigma^2 = exp(log_var)
+        # Weight = 1/(2*exp(log_var)), regularizer = log_var/2
         total = (
-            self.w_rul * loss_rul
-            + self.w_cr * loss_cr
-            + self.w_wt * loss_wt
-            + self.w_forecast * loss_forecast
+            torch.exp(-self.log_var_rul) * loss_rul + self.log_var_rul / 2
+            + torch.exp(-self.log_var_cr) * loss_cr + self.log_var_cr / 2
+            + torch.exp(-self.log_var_wt) * loss_wt + self.log_var_wt / 2
+            + torch.exp(-self.log_var_forecast) * loss_forecast + self.log_var_forecast / 2
         )
 
         loss_dict = {
@@ -85,6 +87,11 @@ class MultiTaskLoss(nn.Module):
             "wt": loss_wt.item(),
             "forecast": loss_forecast.item(),
             "total": total.item(),
+            # Log learned weights for monitoring
+            "w_rul": torch.exp(-self.log_var_rul).item(),
+            "w_cr": torch.exp(-self.log_var_cr).item(),
+            "w_wt": torch.exp(-self.log_var_wt).item(),
+            "w_forecast": torch.exp(-self.log_var_forecast).item(),
         }
 
         return total, loss_dict

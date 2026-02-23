@@ -13,6 +13,7 @@ LEAKAGE PREVENTION:
 """
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -20,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import LambdaLR
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
@@ -30,12 +31,13 @@ import matplotlib.pyplot as plt
 
 from src.config import (
     BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY, EPOCHS,
-    EARLY_STOP_PATIENCE, LR_REDUCE_PATIENCE, LR_REDUCE_FACTOR,
+    EARLY_STOP_PATIENCE, WARMUP_EPOCHS,
     GRAD_CLIP_NORM, RANDOM_SEED,
     EXPERIMENTS, FEATURES_A, FEATURES_B, NUM_WORKERS, N_CV_FOLDS,
+    USE_AMP, AUGMENT_NOISE_STD, AUGMENT_SCALE_RANGE, NUM_RAW_FEATURES,
 )
 from src.data_loader import (
-    load_dataset, split_wells_cv, prepare_fold, prepare_test,
+    load_dataset, engineer_features, split_wells_cv, prepare_fold, prepare_test,
 )
 from src.models import build_model
 from src.losses import MultiTaskLoss
@@ -51,10 +53,21 @@ def seed_everything(seed=RANDOM_SEED):
         torch.backends.cudnn.benchmark = False
 
 
+def build_scheduler(optimizer, total_epochs, warmup_epochs):
+    """Linear warmup + cosine annealing — smooth decay, no harsh steps."""
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs
+        progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+        return max(0.01, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    return LambdaLR(optimizer, lr_lambda)
+
+
 def train_one_epoch(model, loader, criterion, optimizer, device,
-                    grad_clip=GRAD_CLIP_NORM):
+                    grad_clip=GRAD_CLIP_NORM, amp_scaler=None,
+                    noise_std=0.0, scale_range=0.0):
     """
-    Run one training epoch.
+    Run one training epoch with optional AMP and data augmentation.
 
     Returns
     -------
@@ -63,6 +76,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
     model.train()
     accum = {}
     n_batches = 0
+    use_amp = amp_scaler is not None
 
     pbar = tqdm(loader, desc="  Train", leave=False,
                 bar_format="{l_bar}{bar:20}{r_bar}")
@@ -71,14 +85,32 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
             b.to(device) for b in batch
         ]
 
-        preds = model(X)
-        total_loss, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                          y_forecast)
+        # Data augmentation — ONLY on raw sensor features (first NUM_RAW_FEATURES cols)
+        # Engineered features (rolling means, slopes, etc.) are left untouched
+        # to avoid physical inconsistencies (e.g. jittered thickness but unchanged rolling mean)
+        if noise_std > 0:
+            noise = torch.randn(X.size(0), X.size(1), NUM_RAW_FEATURES, device=device) * noise_std
+            X[:, :, :NUM_RAW_FEATURES] = X[:, :, :NUM_RAW_FEATURES] + noise
+        if scale_range > 0:
+            scale = 1.0 + (torch.rand(X.size(0), 1, 1, device=device) - 0.5) * 2 * scale_range
+            X[:, :, :NUM_RAW_FEATURES] = X[:, :, :NUM_RAW_FEATURES] * scale
+
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            preds = model(X)
+            total_loss, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
+                                              y_forecast)
 
         optimizer.zero_grad()
-        total_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
+        if use_amp:
+            amp_scaler.scale(total_loss).backward()
+            amp_scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            amp_scaler.step(optimizer)
+            amp_scaler.update()
+        else:
+            total_loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
 
         for k, v in loss_dict.items():
             accum[k] = accum.get(k, 0.0) + v
@@ -92,9 +124,9 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, device):
+def validate(model, loader, criterion, device, use_amp=False):
     """
-    Run validation pass.
+    Run validation pass (with optional AMP autocast).
 
     Returns
     -------
@@ -116,9 +148,10 @@ def validate(model, loader, criterion, device):
             b.to(device) for b in batch
         ]
 
-        preds = model(X)
-        _, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                 y_forecast)
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            preds = model(X)
+            _, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
+                                     y_forecast)
 
         for k, v in loss_dict.items():
             accum[k] = accum.get(k, 0.0) + v
@@ -150,17 +183,20 @@ def validate(model, loader, criterion, device):
 def _train_loop(model, train_loader, val_loader, criterion, device,
                 tag="", save_path=None, exp_config=None, extra_checkpoint=None):
     """
-    Core training loop with early stopping.
+    Core training loop with early stopping, cosine warmup, AMP, and augmentation.
 
     Returns
     -------
     best_val_loss, best_epoch, history
     """
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", patience=LR_REDUCE_PATIENCE,
-        factor=LR_REDUCE_FACTOR,
-    )
+    scheduler = build_scheduler(optimizer, EPOCHS, WARMUP_EPOCHS)
+
+    # AMP — only on CUDA (not MPS/CPU)
+    use_amp = USE_AMP and device.type == "cuda"
+    amp_scaler = torch.cuda.amp.GradScaler(enabled=use_amp) if use_amp else None
+    if use_amp:
+        tqdm.write(f"{tag} Mixed precision (AMP) enabled")
 
     history = {
         "train_loss": [], "val_loss": [],
@@ -174,12 +210,17 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
     epoch_pbar = tqdm(range(1, EPOCHS + 1), desc=tag,
                       bar_format="{l_bar}{bar:25}{r_bar}")
     for epoch in epoch_pbar:
-        train_losses = train_one_epoch(model, train_loader, criterion,
-                                       optimizer, device)
-        val_losses, mae_rul, mae_cr = validate(model, val_loader,
-                                               criterion, device)
+        train_losses = train_one_epoch(
+            model, train_loader, criterion, optimizer, device,
+            amp_scaler=amp_scaler,
+            noise_std=AUGMENT_NOISE_STD,
+            scale_range=AUGMENT_SCALE_RANGE,
+        )
+        val_losses, mae_rul, mae_cr = validate(
+            model, val_loader, criterion, device, use_amp=use_amp,
+        )
 
-        scheduler.step(val_losses["total"])
+        scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]
 
         history["train_loss"].append(train_losses["total"])
@@ -271,10 +312,12 @@ def train_experiment(name, exp_config, device, output_dir):
     n_features = len(feature_cols)
     backbone_name = exp_config["backbone"]
 
-    # Load data once
+    # Load data once + engineer features (before splitting/scaling)
     print(f"\n[{name}] Loading dataset...")
     df = load_dataset()
-    print(f"[{name}] Rows: {len(df):,} | Wells: {df['Well_ID'].nunique()}")
+    df = engineer_features(df)
+    print(f"[{name}] Rows: {len(df):,} | Wells: {df['Well_ID'].nunique()} | "
+          f"Features: {len(feature_cols)} (incl. 6 engineered)")
 
     # Split: K folds + held-out test (test NEVER seen during training)
     folds, test_wells = split_wells_cv(df)

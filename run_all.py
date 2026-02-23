@@ -28,6 +28,7 @@ import torch
 # 500 wells + 5-fold CV = ~5x longer per experiment
 EXPERIMENT_PRIORITY = OrderedDict([
     ("exp3_bilstm_optA", 120),
+    ("exp6_transformer_optA", 120),
     ("exp4_cnnlstm_optA", 90),
     ("exp5_bilstm_w15", 90),
     ("exp1_lstm_optB", 60),
