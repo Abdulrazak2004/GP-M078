@@ -181,7 +181,7 @@ def predict_at_day(df_well, day_idx, feature_cols=FEATURES_A):
     forecast = preds["forecast"].cpu().numpy().flatten().tolist()
 
     cause_probs = [1.0 / 6] * 6
-    cfi_val = float(compute_cfi(rul, cr, thickness_loss_pct, [cause_probs]))
+    cfi_val = float(np.atleast_1d(compute_cfi(rul, cr, thickness_loss_pct, cause_probs)).flat[0])
 
     return {
         "rul": round(rul, 1),
@@ -259,7 +259,7 @@ def predict_playback(df_well, stride=30):
 
         # ── CFI ──
         cause_probs = [1.0 / 6] * 6
-        cfi_val = float(compute_cfi(rul, cr, thickness_loss_pct, [cause_probs]))
+        cfi_val = float(np.atleast_1d(compute_cfi(rul, cr, thickness_loss_pct, cause_probs)).flat[0])
 
         results.append({
             "day": int(actual_row["Day"]),
@@ -383,7 +383,7 @@ def predict_design_well(params: dict):
         wt = float(preds["wt"].cpu().item())
 
         cause_probs = [1.0 / 6] * 6
-        cfi_val = float(compute_cfi(rul, cr, thickness_loss_pct, [cause_probs]))
+        cfi_val = float(np.atleast_1d(compute_cfi(rul, cr, thickness_loss_pct, cause_probs)).flat[0])
 
         trajectory.append({
             "day": int(actual_row["Day"]),
