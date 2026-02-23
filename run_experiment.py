@@ -4,7 +4,7 @@ Single experiment CLI runner with 5-fold CV.
 
 Usage:
     # Full run (5-fold CV + final model + evaluation)
-    python run_experiment.py --experiment exp1_lstm_optB --gpu 0
+    python run_experiment.py --experiment exp3_bilstm_optA --gpu 0
 
     # Stress test (2 epochs)
     python run_experiment.py --experiment exp1_lstm_optB --gpu 0 --epochs 2
@@ -17,6 +17,9 @@ Usage:
     wait
     python run_experiment.py --experiment exp1_lstm_optB --gpu 0 --fold 5
     # Then run without --fold for Phase 2 (final model + eval)
+
+    # Re-run ONLY evaluation (after a crash during eval):
+    python run_experiment.py --experiment exp3_bilstm_optA --gpu 0 --eval-only
 """
 
 import argparse
@@ -39,6 +42,8 @@ def main():
                         help="Override batch size (default: 1024)")
     parser.add_argument("--fold", type=int, default=None, choices=[1, 2, 3, 4, 5],
                         help="Run only this fold (1-5) for parallel CV across GPUs")
+    parser.add_argument("--eval-only", action="store_true",
+                        help="Skip training, load saved checkpoint and run evaluation only")
     args = parser.parse_args()
 
     # Set CUDA device BEFORE importing torch
@@ -98,7 +103,9 @@ def main():
     print(f"  Batch size: {src.config.BATCH_SIZE} | "
           f"Epochs: {src.config.EPOCHS} | "
           f"VRAM preload: {'YES' if torch.cuda.is_available() else 'no'}")
-    if args.fold:
+    if args.eval_only:
+        print(f"  Mode: EVALUATION ONLY (loading saved checkpoint)")
+    elif args.fold:
         print(f"  Mode: SINGLE FOLD {args.fold} (parallel CV)")
     else:
         print(f"  Mode: Full pipeline (5-fold CV + final model + eval)")
@@ -108,8 +115,73 @@ def main():
     from src.train import train_experiment, seed_everything
     from src.evaluate import evaluate_experiment
     from src.models import build_model
+    from src.data_loader import (
+        load_dataset, engineer_features, split_wells_cv,
+        prepare_test, fit_scaler,
+    )
 
     seed_everything()
+
+    # --eval-only: skip training, just load checkpoint and evaluate
+    if args.eval_only:
+        exp_dir = output_dir / exp_name
+        ckpt_path = exp_dir / "models" / "best_model.pt"
+        if not ckpt_path.exists():
+            print(f"ERROR: No checkpoint found at {ckpt_path}")
+            sys.exit(1)
+
+        feature_opt = exp_config["features"]
+        feature_cols = (src.config.FEATURES_A if feature_opt == "A"
+                        else src.config.FEATURES_B)
+        n_features = len(feature_cols)
+        window_size = exp_config.get("window_size", 30)
+
+        # Load and prepare test data
+        print(f"[{exp_name}] Loading dataset for evaluation...")
+        df = load_dataset()
+        df = engineer_features(df)
+        _, test_wells = split_wells_cv(df)
+
+        # Use all non-test wells to fit scaler (same as training)
+        all_wells = df["Well_ID"].unique().tolist()
+        trainval_wells = [w for w in all_wells if w not in set(test_wells)]
+        df_trainval = df[df["Well_ID"].isin(trainval_wells)]
+        scaler, cols_to_scale = fit_scaler(df_trainval, feature_cols, save=False)
+
+        preload = device if device.type == "cuda" else None
+        test_loader = prepare_test(
+            df, test_wells, scaler, cols_to_scale, feature_cols,
+            window_size, src.config.BATCH_SIZE, 0,
+            preload_device=preload,
+        )
+        print(f"[{exp_name}] Test samples: {len(test_loader.dataset):,}")
+
+        # Load model
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model = build_model(exp_config["backbone"], n_features).to(device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        print(f"[{exp_name}] Loaded checkpoint from epoch {checkpoint.get('epoch', '?')}")
+
+        eval_data = {
+            "test_loader": test_loader,
+            "feature_cols": feature_cols,
+            "n_features": n_features,
+        }
+        training_info = {
+            "best_epoch": checkpoint.get("epoch", 0),
+            "best_val_loss": checkpoint.get("val_loss", 0),
+        }
+        metrics = evaluate_experiment(model, eval_data, device, exp_dir,
+                                       exp_name, training_info)
+
+        print(f"\n{'=' * 60}")
+        print(f"  {exp_name} EVALUATION COMPLETE")
+        print(f"  Test RUL MAE: {metrics['rul_mae']:.1f} days  |  R2: {metrics['rul_r2']:.3f}")
+        print(f"  Test CR MAE: {metrics['cr_mae']:.2f} mpy  |  NMAE: {metrics['cr_nmae']:.1f}%")
+        print(f"  Test WT MAE: {metrics['wt_mae']:.3f} mm  |  "
+              f"Detection: {metrics.get('wt_loss_detection_accuracy', 0):.1%}")
+        print(f"{'=' * 60}")
+        return
 
     # Train (5-fold CV + final model)
     training_info = train_experiment(exp_name, exp_config, device, output_dir,
