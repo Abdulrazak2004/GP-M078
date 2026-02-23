@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 
 import src.config as cfg
 from src.config import (
-    BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY,
+    LEARNING_RATE, WEIGHT_DECAY,
     EARLY_STOP_PATIENCE, WARMUP_EPOCHS,
     GRAD_CLIP_NORM, RANDOM_SEED,
     EXPERIMENTS, FEATURES_A, FEATURES_B, NUM_WORKERS, N_CV_FOLDS,
@@ -304,7 +304,7 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
 # MAIN ENTRY POINT: 5-FOLD CV + FINAL MODEL
 # ============================================================================
 
-def train_experiment(name, exp_config, device, output_dir):
+def train_experiment(name, exp_config, device, output_dir, fold_only=None):
     """
     Full training pipeline with K-fold cross-validation.
 
@@ -330,7 +330,8 @@ def train_experiment(name, exp_config, device, output_dir):
     for d in [model_dir, metric_dir, plot_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    num_workers = NUM_WORKERS if device.type == "cuda" else 0
+    # GPU preloading: data lives in VRAM, no CPU workers needed
+    num_workers = 0 if device.type == "cuda" else 0
     feature_opt = exp_config["features"]
     window_size = exp_config.get("window_size", 30)
     feature_cols = FEATURES_A if feature_opt == "A" else FEATURES_B
@@ -350,8 +351,11 @@ def train_experiment(name, exp_config, device, output_dir):
         w for f in folds for w in f["train"] + f["val"]
     ))
 
+    preload = device if device.type == "cuda" else None
     print(f"[{name}] Model: {backbone_name} | Features: {feature_opt} | "
           f"Window: {window_size} | Device: {device}")
+    print(f"[{name}] Batch: {cfg.BATCH_SIZE} | "
+          f"VRAM preload: {'YES' if preload else 'no'}")
     print(f"[{name}] {N_CV_FOLDS}-fold CV | "
           f"TrainVal: {len(all_trainval)} wells | Test: {len(test_wells)} wells")
 
@@ -369,7 +373,15 @@ def train_experiment(name, exp_config, device, output_dir):
     fold_results = []
     t_cv_start = time.time()
 
-    for fold_i, fold in enumerate(folds):
+    # Support running a single fold (for parallel CV across GPUs)
+    if fold_only is not None:
+        fold_indices = [fold_only - 1]  # 1-indexed → 0-indexed
+        print(f"[{name}] Running SINGLE fold {fold_only} (parallel mode)")
+    else:
+        fold_indices = list(range(len(folds)))
+
+    for fold_i in fold_indices:
+        fold = folds[fold_i]
         fold_tag = f"[{name}|F{fold_i+1}]"
         print(f"\n{fold_tag} === FOLD {fold_i+1}/{N_CV_FOLDS} "
               f"(train={len(fold['train'])}, val={len(fold['val'])}) ===")
@@ -379,7 +391,8 @@ def train_experiment(name, exp_config, device, output_dir):
         # Build fold data (scaler fit ONLY on this fold's training wells)
         train_loader, val_loader, _, _ = prepare_fold(
             df, fold["train"], fold["val"], feature_cols,
-            window_size, BATCH_SIZE, num_workers, save_scaler=False,
+            window_size, cfg.BATCH_SIZE, num_workers, save_scaler=False,
+            preload_device=preload,
         )
 
         print(f"{fold_tag} Train samples: {len(train_loader.dataset):,} | "
@@ -387,7 +400,7 @@ def train_experiment(name, exp_config, device, output_dir):
 
         # Fresh model per fold
         model = build_model(backbone_name, n_features).to(device)
-        if fold_i == 0:
+        if fold_i == fold_indices[0]:
             param_count = sum(p.numel() for p in model.parameters()
                               if p.requires_grad)
             print(f"[{name}] Trainable parameters: {param_count:,}")
@@ -429,6 +442,16 @@ def train_experiment(name, exp_config, device, output_dir):
 
     cv_time = time.time() - t_cv_start
 
+    # If running single fold, save result and exit early (no Phase 2)
+    if fold_only is not None:
+        fr = fold_results[0]
+        print(f"\n[{name}] Fold {fold_only} complete in {cv_time:.1f}s")
+        fold_file = metric_dir / f"fold{fold_only}_result.json"
+        with open(fold_file, "w") as f:
+            json.dump(fr, f, indent=2)
+        print(f"[{name}] Saved to {fold_file}")
+        return {"fold_result": fr, "cv_time_s": cv_time}
+
     # CV Summary
     avg_rul = np.mean([f["val_mae_rul"] for f in fold_results])
     std_rul = np.std([f["val_mae_rul"] for f in fold_results])
@@ -466,7 +489,8 @@ def train_experiment(name, exp_config, device, output_dir):
     # This prevents any leakage from val into scaler statistics
     train_loader, val_loader, final_scaler, final_cols = prepare_fold(
         df, final_train_wells, final_val_wells, feature_cols,
-        window_size, BATCH_SIZE, num_workers, save_scaler=True,
+        window_size, cfg.BATCH_SIZE, num_workers, save_scaler=True,
+        preload_device=preload,
     )
 
     print(f"[{name}] Final split: train={len(final_train_wells)} | "
@@ -480,7 +504,8 @@ def train_experiment(name, exp_config, device, output_dir):
     # Build test loader BEFORE training so we can evaluate every N epochs
     test_loader = prepare_test(
         df, test_wells, final_scaler, final_cols, feature_cols,
-        window_size, BATCH_SIZE, num_workers,
+        window_size, cfg.BATCH_SIZE, num_workers,
+        preload_device=preload,
     )
     print(f"[{name}] Test samples: {len(test_loader.dataset):,}")
 

@@ -3,8 +3,20 @@
 Single experiment CLI runner with 5-fold CV.
 
 Usage:
-    python run_experiment.py --experiment exp3_bilstm_optA --gpu 0
-    python run_experiment.py --experiment timesfm --gpu 0
+    # Full run (5-fold CV + final model + evaluation)
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 0
+
+    # Stress test (2 epochs)
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 0 --epochs 2
+
+    # Parallel folds across GPUs (run in 4 terminals):
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 0 --fold 1 &
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 1 --fold 2 &
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 2 --fold 3 &
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 3 --fold 4 &
+    wait
+    python run_experiment.py --experiment exp1_lstm_optB --gpu 0 --fold 5
+    # Then run without --fold for Phase 2 (final model + eval)
 """
 
 import argparse
@@ -23,20 +35,25 @@ def main():
                         help="Override output directory")
     parser.add_argument("--epochs", type=int, default=None,
                         help="Override number of epochs (e.g. 2 for stress test)")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Override batch size (default: 1024)")
+    parser.add_argument("--fold", type=int, default=None, choices=[1, 2, 3, 4, 5],
+                        help="Run only this fold (1-5) for parallel CV across GPUs")
     args = parser.parse_args()
 
     # Set CUDA device BEFORE importing torch
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
-    # Override epochs if specified (must happen before importing train)
+    # Override config values (must happen before importing train)
+    import src.config
     if args.epochs is not None:
-        import src.config
         src.config.EPOCHS = args.epochs
+    if args.batch_size is not None:
+        src.config.BATCH_SIZE = args.batch_size
 
     import torch
-    from src.config import EXPERIMENTS, OUTPUT_DIR, BATCH_SIZE, NUM_WORKERS
 
-    output_dir = Path(args.output_dir) if args.output_dir else OUTPUT_DIR
+    output_dir = Path(args.output_dir) if args.output_dir else src.config.OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Log directory
@@ -64,12 +81,12 @@ def main():
         return
 
     # Standard experiment
-    if args.experiment not in EXPERIMENTS:
+    if args.experiment not in src.config.EXPERIMENTS:
         print(f"ERROR: Unknown experiment '{args.experiment}'")
-        print(f"Available: {list(EXPERIMENTS.keys())}")
+        print(f"Available: {list(src.config.EXPERIMENTS.keys())}")
         sys.exit(1)
 
-    exp_config = EXPERIMENTS[args.experiment]
+    exp_config = src.config.EXPERIMENTS[args.experiment]
     exp_name = args.experiment
 
     print(f"\n{'=' * 60}")
@@ -78,7 +95,13 @@ def main():
     print(f"  Backbone: {exp_config['backbone']} | "
           f"Features: {exp_config['features']} | "
           f"Window: {exp_config['window_size']}")
-    print(f"  Batch size: {BATCH_SIZE} | 5-fold CV enabled")
+    print(f"  Batch size: {src.config.BATCH_SIZE} | "
+          f"Epochs: {src.config.EPOCHS} | "
+          f"VRAM preload: {'YES' if torch.cuda.is_available() else 'no'}")
+    if args.fold:
+        print(f"  Mode: SINGLE FOLD {args.fold} (parallel CV)")
+    else:
+        print(f"  Mode: Full pipeline (5-fold CV + final model + eval)")
     print(f"{'=' * 60}")
 
     # Import after CUDA_VISIBLE_DEVICES is set
@@ -89,7 +112,12 @@ def main():
     seed_everything()
 
     # Train (5-fold CV + final model)
-    training_info = train_experiment(exp_name, exp_config, device, output_dir)
+    training_info = train_experiment(exp_name, exp_config, device, output_dir,
+                                     fold_only=args.fold)
+
+    # If single fold, we're done (no Phase 2 / evaluation)
+    if args.fold is not None:
+        return
 
     # Load best model for evaluation
     exp_dir = output_dir / exp_name

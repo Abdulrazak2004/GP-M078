@@ -131,8 +131,8 @@ TRANSFORMER_DROPOUT = 0.2
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 128
-LEARNING_RATE = 5e-4
+BATCH_SIZE = 1024
+LEARNING_RATE = 2e-3
 WEIGHT_DECAY = 1e-4   # lighter regularization for right-sized models
 EPOCHS = 100
 EARLY_STOP_PATIENCE = 30  # was 20 — give cosine schedule time to work

@@ -231,6 +231,22 @@ class CasingDataset(Dataset):
             self.targets_wt_prev[idx],
         )
 
+    def to(self, device):
+        """Move entire dataset to device (e.g. GPU) for zero-copy data loading.
+
+        Eliminates CPU→GPU transfer overhead — the DataLoader simply indexes
+        into GPU tensors.  Use num_workers=0 and pin_memory=False when data
+        is already on GPU.
+        """
+        self.windows = self.windows.to(device)
+        self.targets_rul = self.targets_rul.to(device)
+        self.targets_cr = self.targets_cr.to(device)
+        self.targets_wt = self.targets_wt.to(device)
+        self.targets_cause = self.targets_cause.to(device)
+        self.targets_forecast = self.targets_forecast.to(device)
+        self.targets_wt_prev = self.targets_wt_prev.to(device)
+        return self
+
 
 def create_windows_for_well(scaled_features, df_well, window_size=WINDOW_SIZE,
                             stride=STRIDE):
@@ -460,11 +476,17 @@ def split_wells_cv(df, n_folds=N_CV_FOLDS, test_ratio=TEST_RATIO,
 
 def prepare_fold(df, train_wells, val_wells, feature_cols,
                  window_size=WINDOW_SIZE, batch_size=BATCH_SIZE,
-                 num_workers=0, save_scaler=False):
+                 num_workers=0, save_scaler=False, preload_device=None):
     """
     Build train/val DataLoaders for a single CV fold.
 
     LEAKAGE PREVENTION: Scaler is fit ONLY on train_wells rows.
+
+    Parameters
+    ----------
+    preload_device : torch.device, optional
+        If set, moves entire dataset to this device (GPU) for zero-copy
+        data loading.  Forces num_workers=0 and pin_memory=False.
 
     Returns
     -------
@@ -479,7 +501,14 @@ def prepare_fold(df, train_wells, val_wells, feature_cols,
     val_ds = build_dataset(df, val_wells, scaler, cols_to_scale,
                            feature_cols, window_size)
 
-    pin = torch.cuda.is_available()
+    if preload_device is not None:
+        train_ds.to(preload_device)
+        val_ds.to(preload_device)
+        num_workers = 0
+        pin = False
+    else:
+        pin = torch.cuda.is_available()
+
     persist = num_workers > 0
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=pin,
@@ -493,7 +522,7 @@ def prepare_fold(df, train_wells, val_wells, feature_cols,
 
 def prepare_test(df, test_wells, scaler, cols_to_scale, feature_cols,
                  window_size=WINDOW_SIZE, batch_size=BATCH_SIZE,
-                 num_workers=0):
+                 num_workers=0, preload_device=None):
     """
     Build test DataLoader using a pre-fitted scaler.
 
@@ -502,7 +531,13 @@ def prepare_test(df, test_wells, scaler, cols_to_scale, feature_cols,
     test_ds = build_dataset(df, test_wells, scaler, cols_to_scale,
                             feature_cols, window_size)
 
-    pin = torch.cuda.is_available()
+    if preload_device is not None:
+        test_ds.to(preload_device)
+        num_workers = 0
+        pin = False
+    else:
+        pin = torch.cuda.is_available()
+
     persist = num_workers > 0
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
                              num_workers=num_workers, pin_memory=pin,
