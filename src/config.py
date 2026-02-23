@@ -66,6 +66,16 @@ ENGINEERED_FEATURES = [
     "Cumulative_Damage",
 ]
 
+# Metadata one-hot features (constant per well, 0/1 — skip scaling)
+METADATA_ONEHOT_FEATURES = [
+    "Reservoir_Carbonate",
+    "Reservoir_Clastic",
+    "Reservoir_Mixed",
+    "Casing_N80",
+    "Casing_L80",
+    "Casing_P110",
+]
+
 # Option A — realistic (no corrosion rate, no thickness loss pct)
 FEATURES_A = [
     "Status",
@@ -82,13 +92,13 @@ FEATURES_A = [
     "Viscosity_cP",
     "Current_Thickness_mm",
     "Inhibitor_Active",
-] + ENGINEERED_FEATURES  # 14 raw + 6 engineered = 20 features
+] + ENGINEERED_FEATURES + METADATA_ONEHOT_FEATURES  # 14 raw + 6 eng + 6 metadata = 26
 
 # Option B — cheating baseline (adds corrosion rate)
-FEATURES_B = FEATURES_A + ["Corrosion_Rate_mpy"]  # 21 features
+FEATURES_B = FEATURES_A + ["Corrosion_Rate_mpy"]  # 27 features
 
 # Binary features (not scaled)
-BINARY_FEATURES = ["Status", "Inhibitor_Active"]
+BINARY_FEATURES = ["Status", "Inhibitor_Active"] + METADATA_ONEHOT_FEATURES
 
 # Target columns
 TARGET_RUL = "RUL_days"
@@ -139,6 +149,10 @@ HUBER_DELTA_RUL = 20.0
 HUBER_DELTA_CR = 3.0
 HUBER_DELTA_WT = 1.5
 HUBER_DELTA_FORECAST = 1.5
+HUBER_DELTA_PHYSICS = 1.0
+
+# Physics: convert corrosion rate from mpy (mils per year) to mm/day
+MPY_TO_MMDAY = 0.0254 / 365.0
 
 # Multi-task loss weights  (cause removed — trained separately)
 LOSS_WEIGHT_RUL = 1.0       # Primary objective

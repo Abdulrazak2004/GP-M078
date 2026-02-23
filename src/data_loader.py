@@ -24,6 +24,7 @@ from src.config import (
     DATASET_PATH, SCALER_DIR, RANDOM_SEED,
     RUL_CAP, WINDOW_SIZE, STRIDE,
     FEATURES_A, FEATURES_B, BINARY_FEATURES, ENGINEERED_FEATURES,
+    METADATA_ONEHOT_FEATURES,
     TARGET_RUL, TARGET_CR, TARGET_WT, TARGET_CAUSE,
     FORECAST_HORIZONS, NUM_FORECAST_HORIZONS,
     TRAIN_RATIO, VAL_RATIO, TEST_RATIO,
@@ -90,6 +91,12 @@ def engineer_features(df):
 
     # Safety: any remaining NaN → 0
     df[ENGINEERED_FEATURES] = df[ENGINEERED_FEATURES].fillna(0)
+
+    # One-hot encode metadata columns (constant per well, 0/1 values)
+    for val in ["Carbonate", "Clastic", "Mixed"]:
+        df[f"Reservoir_{val}"] = (df["Reservoir_Type"] == val).astype(np.float32)
+    for val in ["N80", "L80", "P110"]:
+        df[f"Casing_{val}"] = (df["Casing_Grade"] == val).astype(np.float32)
 
     return df
 
@@ -197,16 +204,18 @@ class CasingDataset(Dataset):
       y_wt:       scalar                     — wall thickness at end of window
       y_cause:    int                        — corrosion cause label
       y_forecast: (60,)                      — thickness at +30d..+1800d every 30 days (NaN if unavailable)
+      y_wt_prev:  scalar                     — wall thickness at t-1 (for physics constraint)
     """
 
     def __init__(self, windows, targets_rul, targets_cr, targets_wt,
-                 targets_cause, targets_forecast):
+                 targets_cause, targets_forecast, targets_wt_prev):
         self.windows = torch.from_numpy(windows)           # (N, W, F)
         self.targets_rul = torch.from_numpy(targets_rul)   # (N,)
         self.targets_cr = torch.from_numpy(targets_cr)     # (N,)
         self.targets_wt = torch.from_numpy(targets_wt)     # (N,)
         self.targets_cause = torch.from_numpy(targets_cause).long()  # (N,)
         self.targets_forecast = torch.from_numpy(targets_forecast)   # (N, 60)
+        self.targets_wt_prev = torch.from_numpy(targets_wt_prev)    # (N,)
 
     def __len__(self):
         return len(self.windows)
@@ -219,6 +228,7 @@ class CasingDataset(Dataset):
             self.targets_wt[idx],
             self.targets_cause[idx],
             self.targets_forecast[idx],
+            self.targets_wt_prev[idx],
         )
 
 
@@ -239,7 +249,7 @@ def create_windows_for_well(scaled_features, df_well, window_size=WINDOW_SIZE,
     cause = df_well[TARGET_CAUSE].values.astype(np.int64)
 
     windows = []
-    y_rul, y_cr, y_wt, y_cause, y_forecast = [], [], [], [], []
+    y_rul, y_cr, y_wt, y_cause, y_forecast, y_wt_prev = [], [], [], [], [], []
 
     for t in range(window_size, n, stride):
         windows.append(scaled_features[t - window_size: t])
@@ -247,6 +257,7 @@ def create_windows_for_well(scaled_features, df_well, window_size=WINDOW_SIZE,
         y_cr.append(cr[t])
         y_wt.append(wt[t])
         y_cause.append(cause[t])
+        y_wt_prev.append(wt[t - 1])
 
         # 5-year forecast targets
         forecast = []
@@ -265,14 +276,15 @@ def create_windows_for_well(scaled_features, df_well, window_size=WINDOW_SIZE,
         np.array(y_wt, dtype=np.float32),
         np.array(y_cause, dtype=np.int64),
         np.array(y_forecast, dtype=np.float32),
+        np.array(y_wt_prev, dtype=np.float32),
     )
 
 
 def build_dataset(df, well_ids, scaler, cols_to_scale, feature_cols,
                   window_size=WINDOW_SIZE, stride=STRIDE):
     """Build a CasingDataset from a list of well IDs."""
-    all_windows, all_rul, all_cr, all_wt, all_cause, all_forecast = (
-        [], [], [], [], [], []
+    all_windows, all_rul, all_cr, all_wt, all_cause, all_forecast, all_wt_prev = (
+        [], [], [], [], [], [], []
     )
 
     for wid in tqdm(well_ids, desc="    Windows", leave=False,
@@ -282,13 +294,14 @@ def build_dataset(df, well_ids, scaler, cols_to_scale, feature_cols,
         result = create_windows_for_well(scaled, df_well, window_size, stride)
         if result is None:
             continue
-        w, r, c, t, ca, f = result
+        w, r, c, t, ca, f, wp = result
         all_windows.append(w)
         all_rul.append(r)
         all_cr.append(c)
         all_wt.append(t)
         all_cause.append(ca)
         all_forecast.append(f)
+        all_wt_prev.append(wp)
 
     return CasingDataset(
         np.concatenate(all_windows),
@@ -297,6 +310,7 @@ def build_dataset(df, well_ids, scaler, cols_to_scale, feature_cols,
         np.concatenate(all_wt),
         np.concatenate(all_cause),
         np.concatenate(all_forecast),
+        np.concatenate(all_wt_prev),
     )
 
 

@@ -81,7 +81,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
     pbar = tqdm(loader, desc="  Train", leave=False,
                 bar_format="{l_bar}{bar:20}{r_bar}")
     for batch in pbar:
-        X, y_rul, y_cr, y_wt, y_cause, y_forecast = [
+        X, y_rul, y_cr, y_wt, y_cause, y_forecast, y_wt_prev = [
             b.to(device) for b in batch
         ]
 
@@ -98,7 +98,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
         with torch.cuda.amp.autocast(enabled=use_amp):
             preds = model(X)
             total_loss, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                              y_forecast)
+                                              y_forecast, y_wt_prev)
 
         optimizer.zero_grad()
         if use_amp:
@@ -144,14 +144,14 @@ def validate(model, loader, criterion, device, use_amp=False):
     pbar = tqdm(loader, desc="  Val  ", leave=False,
                 bar_format="{l_bar}{bar:20}{r_bar}")
     for batch in pbar:
-        X, y_rul, y_cr, y_wt, y_cause, y_forecast = [
+        X, y_rul, y_cr, y_wt, y_cause, y_forecast, y_wt_prev = [
             b.to(device) for b in batch
         ]
 
         with torch.cuda.amp.autocast(enabled=use_amp):
             preds = model(X)
             _, loss_dict = criterion(preds, y_rul, y_cr, y_wt,
-                                     y_forecast)
+                                     y_forecast, y_wt_prev)
 
         for k, v in loss_dict.items():
             accum[k] = accum.get(k, 0.0) + v
@@ -181,9 +181,17 @@ def validate(model, loader, criterion, device, use_amp=False):
 # ============================================================================
 
 def _train_loop(model, train_loader, val_loader, criterion, device,
-                tag="", save_path=None, exp_config=None, extra_checkpoint=None):
+                tag="", save_path=None, exp_config=None, extra_checkpoint=None,
+                test_loader=None, test_every=5):
     """
     Core training loop with early stopping, cosine warmup, AMP, and augmentation.
+
+    Parameters
+    ----------
+    test_loader : DataLoader, optional
+        If provided, run inference on test set every `test_every` epochs.
+    test_every : int
+        Frequency (in epochs) for test set evaluation.
 
     Returns
     -------
@@ -202,6 +210,8 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
         "train_loss": [], "val_loss": [],
         "val_mae_rul": [], "val_mae_cr": [],
         "lr": [],
+        "test_mae_rul": [], "test_mae_cr": [],
+        "test_epochs": [],
     }
     best_val_loss = float("inf")
     best_epoch = 0
@@ -246,6 +256,20 @@ def _train_loop(model, train_loader, val_loader, criterion, device,
                 f"MAE_RUL: {mae_rul:.1f} | "
                 f"MAE_CR: {mae_cr:.2f} | "
                 f"LR: {current_lr:.2e}"
+            )
+
+        # Periodic test set evaluation
+        if test_loader is not None and epoch % test_every == 0:
+            _, test_mae_rul, test_mae_cr = validate(
+                model, test_loader, criterion, device, use_amp=use_amp,
+            )
+            history["test_mae_rul"].append(test_mae_rul)
+            history["test_mae_cr"].append(test_mae_cr)
+            history["test_epochs"].append(epoch)
+            tqdm.write(
+                f"{tag} [TEST ep{epoch}] "
+                f"MAE_RUL: {test_mae_rul:.1f}d | "
+                f"MAE_CR: {test_mae_cr:.2f}mpy"
             )
 
         if val_losses["total"] < best_val_loss:
@@ -452,6 +476,13 @@ def train_experiment(name, exp_config, device, output_dir):
     model = build_model(backbone_name, n_features).to(device)
     criterion = MultiTaskLoss().to(device)
 
+    # Build test loader BEFORE training so we can evaluate every N epochs
+    test_loader = prepare_test(
+        df, test_wells, final_scaler, final_cols, feature_cols,
+        window_size, BATCH_SIZE, num_workers,
+    )
+    print(f"[{name}] Test samples: {len(test_loader.dataset):,}")
+
     t_final_start = time.time()
     best_val_loss, best_epoch, history = _train_loop(
         model, train_loader, val_loader, criterion, device,
@@ -459,6 +490,8 @@ def train_experiment(name, exp_config, device, output_dir):
         save_path=model_dir / "best_model.pt",
         exp_config=exp_config,
         extra_checkpoint={"cv_summary": cv_summary},
+        test_loader=test_loader,
+        test_every=5,
     )
     final_time = time.time() - t_final_start
 
@@ -495,13 +528,6 @@ def train_experiment(name, exp_config, device, output_dir):
     plt.tight_layout()
     fig.savefig(plot_dir / "loss_curves.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-
-    # Build test loader (scaler from final_train_wells, NO test data in scaler)
-    test_loader = prepare_test(
-        df, test_wells, final_scaler, final_cols, feature_cols,
-        window_size, BATCH_SIZE, num_workers,
-    )
-    print(f"[{name}] Test samples: {len(test_loader.dataset):,}")
 
     total_time = cv_time + final_time
 

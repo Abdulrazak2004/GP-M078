@@ -39,67 +39,75 @@ from src.config import (
 # ============================================================================
 
 class MultiTaskHeads(nn.Module):
-    """Four task-specific output heads fed from a shared feature vector.
+    """Four task-specific output heads with physics-informed CR head.
 
-    Fixed head dims (32) to keep heads lightweight — backbone does the heavy lifting.
+    CR is instantaneous (NORSOK takes current conditions → CR), so the CR head
+    uses raw features from the last timestep instead of temporal backbone output.
+    RUL/WT/Forecast are cumulative and use temporal features from the backbone.
+
     Cause classification is trained separately — not part of this model.
     """
 
-    def __init__(self, input_dim):
+    def __init__(self, temporal_dim, raw_dim):
         super().__init__()
 
-        # Head 1: RUL (regression) — clamped to [0, RUL_CAP]
+        # Head 1: RUL (regression) — uses temporal features, clamped to [0, RUL_CAP]
         self.head_rul = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(temporal_dim, 32),
             nn.ReLU(),
             nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
         )
 
-        # Head 2: Corrosion Rate (regression)
+        # Head 2: Corrosion Rate (regression) — physics-informed: uses RAW features
+        # CR is instantaneous (NORSOK equation), no temporal dependency
         self.head_cr = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(raw_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT_HEAD),
+            nn.Linear(64, 32),
             nn.ReLU(),
             nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
             nn.ReLU(),  # rate >= 0
         )
 
-        # Head 3: Wall Thickness (regression)
+        # Head 3: Wall Thickness (regression) — uses temporal features
         self.head_wt = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(temporal_dim, 32),
             nn.ReLU(),
             nn.Dropout(DROPOUT_HEAD),
             nn.Linear(32, 1),
             nn.ReLU(),  # thickness >= 0
         )
 
-        # Head 4: 60-Month Forecast (every 30 days for 5 years)
+        # Head 4: 60-Month Forecast — uses temporal features
         self.head_forecast = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(temporal_dim, 64),
             nn.ReLU(),
             nn.Dropout(DROPOUT_HEAD),
             nn.Linear(64, NUM_FORECAST_HORIZONS),
             nn.ReLU(),  # thickness >= 0
         )
 
-    def forward(self, features):
+    def forward(self, temporal_features, raw_features):
         """
         Parameters
         ----------
-        features : Tensor of shape (batch, input_dim)
+        temporal_features : Tensor of shape (batch, temporal_dim) — from backbone
+        raw_features : Tensor of shape (batch, raw_dim) — x[:, -1, :] last timestep
 
         Returns
         -------
         dict with keys: 'rul', 'cr', 'wt', 'forecast'
         """
-        rul = self.head_rul(features).squeeze(-1)
+        rul = self.head_rul(temporal_features).squeeze(-1)
         rul = rul.clamp(0.0, RUL_CAP)  # enforce [0, 500]
         return {
-            "rul": rul,                                        # (B,)
-            "cr": self.head_cr(features).squeeze(-1),          # (B,)
-            "wt": self.head_wt(features).squeeze(-1),          # (B,)
-            "forecast": self.head_forecast(features),          # (B, 60)
+            "rul": rul,                                                    # (B,)
+            "cr": self.head_cr(raw_features).squeeze(-1),                  # (B,)
+            "wt": self.head_wt(temporal_features).squeeze(-1),             # (B,)
+            "forecast": self.head_forecast(temporal_features),             # (B, 60)
         }
 
 
@@ -180,10 +188,12 @@ class SimpleLSTM(nn.Module):
         self.norm2 = nn.LayerNorm(hidden2)
         self.drop2 = nn.Dropout(dropout)
 
-        self.heads = MultiTaskHeads(hidden2)
+        self.heads = MultiTaskHeads(hidden2, n_features)
 
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
+        raw_last = x[:, -1, :]  # (B, n_features) — for CR head
+
         out, _ = self.lstm1(x)
         out = self.drop1(self.norm1(out))
         out, _ = self.lstm2(out)
@@ -191,7 +201,7 @@ class SimpleLSTM(nn.Module):
 
         # Take last timestep
         features = out[:, -1, :]  # (B, hidden2)
-        return self.heads(features)
+        return self.heads(features, raw_last)
 
 
 # ============================================================================
@@ -222,10 +232,12 @@ class BiLSTMAttention(nn.Module):
         # Extra dropout before heads
         self.drop3 = nn.Dropout(DROPOUT_HEAD)
 
-        self.heads = MultiTaskHeads(hidden2 * 2)
+        self.heads = MultiTaskHeads(hidden2 * 2, n_features)
 
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
+        raw_last = x[:, -1, :]  # (B, n_features) — for CR head
+
         out, _ = self.lstm1(x)
         out = self.drop1(self.norm1(out))
         out, _ = self.lstm2(out)
@@ -235,7 +247,7 @@ class BiLSTMAttention(nn.Module):
         features, self._attn_weights = self.attention(out)  # (B, hidden2*2)
         features = self.drop3(features)
 
-        return self.heads(features)
+        return self.heads(features, raw_last)
 
     @property
     def attention_weights(self):
@@ -249,12 +261,11 @@ class BiLSTMAttention(nn.Module):
 
 class CNNLSTM(nn.Module):
     """
-    Conv1D → LSTM → multi-task heads, with CNN skip connection for CR head.
+    Conv1D → LSTM → multi-task heads.
 
     CNN captures local patterns (short-term trends),
     LSTM captures longer temporal dependencies.
-    CR head gets direct CNN features (skip connection) because corrosion rate
-    is a derivative — LSTM pooling smooths out the high-frequency gradient signal.
+    CR head uses raw last-timestep features (physics-informed).
     """
 
     def __init__(self, n_features, cnn1=CNN_FILTERS_1, cnn2=CNN_FILTERS_2,
@@ -270,38 +281,21 @@ class CNNLSTM(nn.Module):
         self.relu2 = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2)
 
-        # CNN output length after conv+pool: (window - 4) // 2
-        # For window=30: (30-4)//2 = 13 timesteps × cnn2 channels
-        self.cnn_out_len = None  # set dynamically in forward
-
         self.lstm = nn.LSTM(cnn2, lstm_hidden, batch_first=True)
         self.norm = nn.LayerNorm(lstm_hidden)
         self.drop = nn.Dropout(dropout)
 
-        # Standard heads for RUL, WT, Forecast
-        self.heads = MultiTaskHeads(lstm_hidden)
-
-        # CR skip connection: CNN features (flattened last timestep) + LSTM → CR head
-        # Uses last CNN timestep (cnn2 dims) concatenated with LSTM hidden
-        cr_input_dim = lstm_hidden + cnn2
-        self.head_cr_skip = nn.Sequential(
-            nn.Linear(cr_input_dim, 32),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(32, 1),
-            nn.ReLU(),  # rate >= 0
-        )
+        self.heads = MultiTaskHeads(lstm_hidden, n_features)
 
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
+        raw_last = x[:, -1, :]  # (B, n_features) — for CR head
+
         # Conv1d expects (B, C, L) — transpose from (B, L, C)
         out = x.transpose(1, 2)                        # (B, n_features, window)
         out = self.relu1(self.bn1(self.conv1(out)))     # (B, cnn1, window-2)
         out = self.relu2(self.bn2(self.conv2(out)))     # (B, cnn2, window-4)
         cnn_features = self.pool(out)                   # (B, cnn2, (window-4)//2)
-
-        # Save CNN last timestep for CR skip connection
-        cnn_last = cnn_features[:, :, -1]               # (B, cnn2)
 
         # Back to (B, L, C) for LSTM
         out = cnn_features.transpose(1, 2)
@@ -311,14 +305,7 @@ class CNNLSTM(nn.Module):
         # Take last timestep
         lstm_features = out[:, -1, :]                   # (B, lstm_hidden)
 
-        # Standard heads (RUL, WT, Forecast use LSTM features)
-        preds = self.heads(lstm_features)
-
-        # Override CR with skip-connected head
-        cr_input = torch.cat([lstm_features, cnn_last], dim=-1)  # (B, lstm_hidden + cnn2)
-        preds["cr"] = self.head_cr_skip(cr_input).squeeze(-1)
-
-        return preds
+        return self.heads(lstm_features, raw_last)
 
 
 # ============================================================================
@@ -357,10 +344,11 @@ class TransformerBackbone(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.drop = nn.Dropout(dropout)
 
-        self.heads = MultiTaskHeads(d_model)
+        self.heads = MultiTaskHeads(d_model, n_features)
 
     def forward(self, x):
         """x: (batch, window, n_features) → dict of predictions"""
+        raw_last = x[:, -1, :]  # (B, n_features) — for CR head
         seq_len = x.size(1)
 
         # Project + add positional embeddings
@@ -373,7 +361,7 @@ class TransformerBackbone(nn.Module):
         features = self.norm(out.mean(dim=1))  # (B, d_model)
         features = self.drop(features)
 
-        return self.heads(features)
+        return self.heads(features, raw_last)
 
 
 # ============================================================================

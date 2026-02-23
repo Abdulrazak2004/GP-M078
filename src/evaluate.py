@@ -62,7 +62,7 @@ def predict_deterministic(model, loader, device):
 
     for batch in tqdm(loader, desc="  Inference", leave=False,
                       bar_format="{l_bar}{bar:20}{r_bar}"):
-        X, y_rul, y_cr, y_wt, y_cause, y_forecast = [
+        X, y_rul, y_cr, y_wt, y_cause, y_forecast, y_wt_prev = [
             b.to(device) for b in batch
         ]
         out = model(X)
@@ -108,7 +108,7 @@ def predict_mc_dropout(model, loader, device, n_samples=MC_DROPOUT_SAMPLES):
             rul_s, cr_s, wt_s, forecast_s = [], [], [], []
 
             for batch in loader:
-                X, y_rul, y_cr, y_wt, y_cause, y_forecast = [
+                X, y_rul, y_cr, y_wt, y_cause, y_forecast, y_wt_prev = [
                     b.to(device) for b in batch
                 ]
                 out = model(X)
