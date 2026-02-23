@@ -58,7 +58,7 @@ def load_model():
     """Load the trained BiLSTM-Attention model and scalers."""
     global _model, _scaler, _scaled_columns, _device, _key_feature_indices
 
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _device = torch.device("cpu")  # Force CPU — avoids GPU compatibility issues on Vast.ai
 
     # Load model
     n_features = len(FEATURES_A)
