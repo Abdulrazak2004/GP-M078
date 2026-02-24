@@ -12,6 +12,21 @@ import AttentionHeatmap from '../components/AttentionHeatmap';
 import InputWindowViz from '../components/InputWindowViz';
 import AccuracyTracker from '../components/AccuracyTracker';
 
+// Exponential moving average for smoothing noisy model predictions
+function ema(data, key, alpha = 0.3) {
+  if (!data.length) return data;
+  const result = [...data];
+  let prev = result[0][key];
+  for (let i = 0; i < result.length; i++) {
+    const raw = result[i][key];
+    if (raw != null) {
+      prev = alpha * raw + (1 - alpha) * (prev ?? raw);
+      result[i] = { ...result[i], [key]: +prev.toFixed(3) };
+    }
+  }
+  return result;
+}
+
 function SetPageTitle() {
   useEffect(() => {
     const el = document.getElementById('page-title');
@@ -65,7 +80,7 @@ export default function WellMonitor() {
   // Chart data: side-by-side actual vs predicted up to current step
   const historyData = useMemo(() => {
     if (!playbackData) return [];
-    return playbackData.slice(0, currentStep + 1).map(p => ({
+    const raw = playbackData.slice(0, currentStep + 1).map(p => ({
       day: p.day,
       year: +(p.day / 365.25).toFixed(1),
       actual_wt: p.actual_wt,
@@ -78,6 +93,8 @@ export default function WellMonitor() {
       actual_rul: p.actual_rul,
       predicted_rul: p.rul,
     }));
+    // Smooth the noisy model predictions (EMA alpha=0.3)
+    return ema(ema(ema(raw, 'predicted_wt', 0.3), 'predicted_cr', 0.3), 'cfi', 0.3);
   }, [playbackData, currentStep]);
 
   // Full timeline (faded, for context)
