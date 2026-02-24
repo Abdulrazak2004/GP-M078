@@ -133,7 +133,7 @@ def well_predictions(well_id: str, day: int = Query(default=5000)):
 
 
 @app.get("/api/wells/{well_id}/playback")
-def well_playback(well_id: str, stride: int = Query(default=30)):
+def well_playback(well_id: str, stride: int = Query(default=60)):
     """Return pre-computed predictions for playback animation."""
     from wells_data import get_well_data
     from inference import predict_playback

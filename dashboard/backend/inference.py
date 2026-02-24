@@ -35,7 +35,7 @@ SCALER_PATH = PROJECT_ROOT / "outputs" / "scalers" / "feature_scaler.joblib"
 SCALED_COLS_PATH = PROJECT_ROOT / "outputs" / "scalers" / "scaled_columns.joblib"
 
 # MC Dropout config
-MC_SAMPLES = 15  # Number of stochastic forward passes
+MC_SAMPLES = 5  # Number of stochastic forward passes (reduced for speed)
 
 # Key feature indices for the input window heatmap (most interpretable ones)
 KEY_FEATURE_NAMES = [
@@ -198,7 +198,10 @@ def predict_at_day(df_well, day_idx, feature_cols=FEATURES_A):
     }
 
 
-def predict_playback(df_well, stride=30):
+_playback_cache = {}  # Cache: well_id -> results
+
+
+def predict_playback(df_well, stride=60):
     """
     Pre-compute enriched predictions for playback animation.
 
@@ -210,6 +213,12 @@ def predict_playback(df_well, stride=30):
       - Input window key features (30 x 11 matrix)
       - Prediction errors
     """
+    # Check cache first
+    well_id = str(df_well.iloc[0].get("Well_ID", "unknown"))
+    cache_key = f"{well_id}_{stride}"
+    if cache_key in _playback_cache:
+        return _playback_cache[cache_key]
+
     n = len(df_well)
     results = []
 
@@ -300,6 +309,7 @@ def predict_playback(df_well, stride=30):
             "forecast": [round(f, 3) for f in forecast[:12]],
         })
 
+    _playback_cache[cache_key] = results
     return results
 
 
