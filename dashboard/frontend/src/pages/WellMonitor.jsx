@@ -125,17 +125,62 @@ export default function WellMonitor() {
 
   const handlePlayPause = useCallback((val) => setPlaying(val), []);
 
+  // Loading progress animation
+  const [loadingTime, setLoadingTime] = useState(0);
+  useEffect(() => {
+    if (!loading) { setLoadingTime(0); return; }
+    const t = setInterval(() => setLoadingTime(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [loading]);
+
   if (loading) {
+    const steps = [
+      { label: 'Loading well data', threshold: 0 },
+      { label: 'Scaling features', threshold: 3 },
+      { label: 'Running BiLSTM forward passes', threshold: 5 },
+      { label: 'MC Dropout confidence estimation', threshold: 10 },
+      { label: 'Extracting attention weights', threshold: 15 },
+      { label: 'Computing CFI risk scores', threshold: 20 },
+    ];
+    const activeStep = steps.filter(s => loadingTime >= s.threshold).length - 1;
+    const progress = Math.min(95, (loadingTime / 30) * 100);
+
     return (
       <div className="h-full flex items-center justify-center">
         <SetPageTitle />
-        <div className="text-center animate-fade-in">
-          <div className="w-10 h-10 border-2 border-accent-blue border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <div className="text-sm text-text-muted tracking-widest uppercase">
-            Loading AI Predictions...
+        <div className="text-center animate-fade-in w-96">
+          {/* Spinner */}
+          <div className="w-16 h-16 border-2 border-accent-cyan/30 border-t-accent-cyan rounded-full animate-spin mx-auto mb-6" />
+
+          <div className="text-sm text-accent-cyan tracking-widest uppercase mb-6">
+            AI Inference Pipeline
           </div>
-          <div className="text-xs text-text-muted mt-2">
-            Running MC Dropout inference ({'>'}5,000 forward passes)
+
+          {/* Progress bar */}
+          <div className="w-full bg-bg-elevated rounded-full h-1.5 mb-6">
+            <div
+              className="bg-accent-cyan h-1.5 rounded-full transition-all duration-1000"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+
+          {/* Steps */}
+          <div className="text-left space-y-2">
+            {steps.map((step, i) => (
+              <div key={i} className={`flex items-center gap-2 text-xs transition-all duration-500 ${
+                i < activeStep ? 'text-accent-green' : i === activeStep ? 'text-accent-cyan' : 'text-text-muted/40'
+              }`}>
+                <span className="w-4 text-center font-mono">
+                  {i < activeStep ? '\u2713' : i === activeStep ? '\u25CB' : '\u00B7'}
+                </span>
+                {step.label}
+                {i === activeStep && <span className="animate-pulse ml-1">...</span>}
+              </div>
+            ))}
+          </div>
+
+          <div className="text-[10px] text-text-muted mt-6">
+            {loadingTime}s elapsed
           </div>
         </div>
       </div>

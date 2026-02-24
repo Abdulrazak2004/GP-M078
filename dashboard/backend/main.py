@@ -132,9 +132,21 @@ def well_predictions(well_id: str, day: int = Query(default=5000)):
     return result
 
 
+CACHE_DIR = Path(__file__).resolve().parent / "cache"
+
+
 @app.get("/api/wells/{well_id}/playback")
 def well_playback(well_id: str, stride: int = Query(default=60)):
-    """Return pre-computed predictions for playback animation."""
+    """Return predictions for playback — serves from disk cache if available."""
+    import json as _json
+
+    # Try disk cache first (instant)
+    cache_file = CACHE_DIR / f"{well_id}.json"
+    if cache_file.exists():
+        with open(cache_file) as f:
+            return _json.load(f)
+
+    # Fallback: compute on the fly
     from wells_data import get_well_data
     from inference import predict_playback
 
@@ -144,7 +156,6 @@ def well_playback(well_id: str, stride: int = Query(default=60)):
 
     results = predict_playback(df_well, stride=stride)
 
-    # Also include well metadata
     first_row = df_well.iloc[0]
     metadata = {
         "well_id": well_id,
