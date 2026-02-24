@@ -116,6 +116,17 @@ export default function WellMonitor() {
     }));
   }, [current]);
 
+  // Shared Y-axis domain so both charts match
+  const wtDomain = useMemo(() => {
+    if (!historyData.length) return [0, 15];
+    const allWt = historyData.flatMap(d =>
+      [d.actual_wt, d.predicted_wt, d.wt_ci_low, d.wt_ci_high].filter(v => v != null)
+    );
+    const min = Math.floor(Math.min(...allWt) - 0.5);
+    const max = Math.ceil(Math.max(...allWt) + 0.5);
+    return [min, max];
+  }, [historyData]);
+
   const handleStepChange = useCallback((valOrFn) => {
     setCurrentStep(prev => {
       const next = typeof valOrFn === 'function' ? valOrFn(prev) : valOrFn;
@@ -275,7 +286,7 @@ export default function WellMonitor() {
                 <ComposedChart data={historyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
                   <XAxis dataKey="year" stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} />
-                  <YAxis stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <YAxis stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} domain={wtDomain} />
                   <RTooltip
                     contentStyle={{ background: CHART_COLORS.tooltip, border: `1px solid ${CHART_COLORS.grid}`, borderRadius: 8, fontSize: 11 }}
                     formatter={(v) => [v?.toFixed(3), '']}
@@ -309,7 +320,7 @@ export default function WellMonitor() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
                   <XAxis dataKey="year" stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} />
-                  <YAxis stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <YAxis stroke={CHART_COLORS.axis} tick={{ fontSize: 10 }} domain={wtDomain} />
                   <RTooltip
                     contentStyle={{ background: CHART_COLORS.tooltip, border: `1px solid ${CHART_COLORS.grid}`, borderRadius: 8, fontSize: 11 }}
                     formatter={(v) => [v?.toFixed(3), '']}
