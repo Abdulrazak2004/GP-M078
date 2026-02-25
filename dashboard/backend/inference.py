@@ -407,14 +407,23 @@ def predict_design_well(params: dict):
         })
 
     latest = trajectory[-1] if trajectory else {"rul": 0, "cfi": 0}
-    # Max RUL is from early in the trajectory (when the well is fresh)
-    max_rul = max((p["rul"] for p in trajectory), default=0) if trajectory else 0
+
+    # Compute RUL from the actual simulated WT trajectory (model RUL head is unreliable).
+    # Retirement threshold: 50% of initial thickness or 3mm, whichever is larger (API 570).
+    initial_wt = params.get("initial_thickness_mm", 11.0)
+    retirement_wt = max(initial_wt * 0.5, 3.0)
+    rul_days = trajectory[-1]["day"] if trajectory else 0  # default: full life
+    for point in trajectory:
+        if point["actual_wt"] <= retirement_wt:
+            rul_days = point["day"]
+            break
+
     risk_timeline = _compute_risk_timeline(trajectory)
     recommendation = _material_recommendation(trajectory, params.get("casing_grade", "L80"))
 
     return {
         "trajectory": trajectory,
-        "rul_years": round(max_rul / 365.25, 1),
+        "rul_years": round(rul_days / 365.25, 1),
         "final_cfi": latest["cfi"],
         "risk_timeline": risk_timeline,
         "recommendation": recommendation,
