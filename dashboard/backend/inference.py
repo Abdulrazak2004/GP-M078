@@ -407,12 +407,14 @@ def predict_design_well(params: dict):
         })
 
     latest = trajectory[-1] if trajectory else {"rul": 0, "cfi": 0}
+    # Max RUL is from early in the trajectory (when the well is fresh)
+    max_rul = max((p["rul"] for p in trajectory), default=0) if trajectory else 0
     risk_timeline = _compute_risk_timeline(trajectory)
     recommendation = _material_recommendation(trajectory, params.get("casing_grade", "L80"))
 
     return {
         "trajectory": trajectory,
-        "rul_years": round(latest["rul"] / 365.25, 1),
+        "rul_years": round(max_rul / 365.25, 1),
         "final_cfi": latest["cfi"],
         "risk_timeline": risk_timeline,
         "recommendation": recommendation,
