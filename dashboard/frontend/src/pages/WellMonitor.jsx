@@ -6,11 +6,14 @@ import {
 } from 'recharts';
 import { getWellsSummary, getWellPlayback } from '../utils/api';
 import { CHART_COLORS, getCfiColor, COLORS } from '../utils/colors';
+import { useUnits } from '../contexts/UnitContext';
+import { convert } from '../utils/units';
 import MetricCard from '../components/MetricCard';
 import TimeSlider from '../components/TimeSlider';
 import AttentionHeatmap from '../components/AttentionHeatmap';
 import InputWindowViz from '../components/InputWindowViz';
 import AccuracyTracker from '../components/AccuracyTracker';
+import FeatureReadings from '../components/FeatureReadings';
 
 // Exponential moving average for smoothing noisy model predictions
 function ema(data, key, alpha = 0.3) {
@@ -44,6 +47,7 @@ export default function WellMonitor() {
   const [currentStep, setCurrentStep] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { fmt, unitLabel, cv } = useUnits();
 
   // Load well list — default to a well with visible degradation
   useEffect(() => {
@@ -78,43 +82,48 @@ export default function WellMonitor() {
   const current = playbackData?.[currentStep];
 
   // Chart data: side-by-side actual vs predicted up to current step
+  // Store raw internal values and convert for display via unit system
   const historyData = useMemo(() => {
     if (!playbackData) return [];
+    const wtUnit = unitLabel('wt');
+    const crUnit = unitLabel('cr');
     const raw = playbackData.slice(0, currentStep + 1).map(p => ({
       day: p.day,
       year: +(p.day / 365.25).toFixed(1),
-      actual_wt: p.actual_wt,
-      predicted_wt: p.wt,
-      wt_ci_low: p.wt_ci_low,
-      wt_ci_high: p.wt_ci_high,
-      actual_cr: p.actual_cr,
-      predicted_cr: p.cr,
+      actual_wt: convert('wt', p.actual_wt, wtUnit),
+      predicted_wt: convert('wt', p.wt, wtUnit),
+      wt_ci_low: convert('wt', p.wt_ci_low, wtUnit),
+      wt_ci_high: convert('wt', p.wt_ci_high, wtUnit),
+      actual_cr: convert('cr', p.actual_cr, crUnit),
+      predicted_cr: convert('cr', p.cr, crUnit),
       cfi: p.cfi,
       actual_rul: p.actual_rul,
       predicted_rul: p.rul,
     }));
     // Smooth the noisy model predictions (EMA alpha=0.3)
     return ema(ema(ema(raw, 'predicted_wt', 0.3), 'predicted_cr', 0.3), 'cfi', 0.3);
-  }, [playbackData, currentStep]);
+  }, [playbackData, currentStep, unitLabel]);
 
   // Full timeline (faded, for context)
   const fullWtData = useMemo(() => {
     if (!playbackData) return [];
+    const wtUnit = unitLabel('wt');
     return playbackData.map(p => ({
       day: p.day,
       year: +(p.day / 365.25).toFixed(1),
-      actual_wt: p.actual_wt,
+      actual_wt: convert('wt', p.actual_wt, wtUnit),
     }));
-  }, [playbackData]);
+  }, [playbackData, unitLabel]);
 
   // Forecast from current point
   const forecastData = useMemo(() => {
     if (!current?.forecast) return [];
+    const wtUnit = unitLabel('wt');
     return current.forecast.map((wt, i) => ({
       month: i + 1,
-      wt,
+      wt: convert('wt', wt, wtUnit),
     }));
-  }, [current]);
+  }, [current, unitLabel]);
 
   // Shared Y-axis domain so both charts match
   const wtDomain = useMemo(() => {
@@ -222,7 +231,7 @@ export default function WellMonitor() {
             <span className="w-px h-3 bg-bg-border" />
             <span>{metadata.casing_grade}</span>
             <span className="w-px h-3 bg-bg-border" />
-            <span>WT₀: {metadata.initial_thickness} mm</span>
+            <span>WT₀: {fmt('wt', metadata.initial_thickness)} {unitLabel('wt')}</span>
           </div>
         )}
       </div>
@@ -247,20 +256,20 @@ export default function WellMonitor() {
           <div className="grid grid-cols-5 gap-3 mb-3 animate-fade-in">
             <MetricCard
               label="Wall Thickness"
-              value={current.actual_wt?.toFixed(2)}
-              unit="mm"
+              value={fmt('wt', current.actual_wt)}
+              unit={unitLabel('wt')}
               color={current.actual_wt < 5 ? 'red' : current.actual_wt < 7 ? 'orange' : 'blue'}
             />
             <MetricCard
               label="AI Predicted WT"
-              value={current.wt?.toFixed(2)}
-              unit="mm"
+              value={fmt('wt', current.wt)}
+              unit={unitLabel('wt')}
               color="cyan"
             />
             <MetricCard
               label="Corrosion Rate"
-              value={current.actual_cr?.toFixed(2)}
-              unit="mpy"
+              value={fmt('cr', current.actual_cr)}
+              unit={unitLabel('cr')}
               color={current.actual_cr > 10 ? 'red' : current.actual_cr > 5 ? 'orange' : 'blue'}
             />
             <MetricCard
@@ -294,7 +303,7 @@ export default function WellMonitor() {
                   {/* Faded full timeline for context */}
                   <Line data={fullWtData} dataKey="actual_wt" stroke={CHART_COLORS.actual} strokeOpacity={0.2} dot={false} strokeWidth={1} />
                   {/* Revealed actual data */}
-                  <Line type="monotone" dataKey="actual_wt" stroke={CHART_COLORS.actual} dot={false} strokeWidth={2} name="Actual WT (mm)" />
+                  <Line type="monotone" dataKey="actual_wt" stroke={CHART_COLORS.actual} dot={false} strokeWidth={2} name={`Actual WT (${unitLabel('wt')})`} />
                 </ComposedChart>
               </ResponsiveContainer>
               <div className="text-[10px] text-text-muted mt-1 text-center">
@@ -329,7 +338,7 @@ export default function WellMonitor() {
                   <Area type="monotone" dataKey="wt_ci_high" stroke="none" fill="url(#confBand)" name="95% CI Upper" />
                   <Area type="monotone" dataKey="wt_ci_low" stroke="none" fill="transparent" name="95% CI Lower" />
                   {/* Predicted line */}
-                  <Line type="monotone" dataKey="predicted_wt" stroke={COLORS.accentCyan} dot={false} strokeWidth={2} name="Predicted WT (mm)" />
+                  <Line type="monotone" dataKey="predicted_wt" stroke={COLORS.accentCyan} dot={false} strokeWidth={2} name={`Predicted WT (${unitLabel('wt')})`} />
                   {/* Ghost: actual for comparison */}
                   <Line type="monotone" dataKey="actual_wt" stroke={CHART_COLORS.actual} strokeOpacity={0.3} dot={false} strokeWidth={1} strokeDasharray="4 4" name="Actual (ref)" />
                 </ComposedChart>
@@ -360,7 +369,7 @@ export default function WellMonitor() {
           </div>
 
           {/* ═══════════ BOTTOM: CFI + FORECAST ═══════════ */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 mb-3">
             {/* CFI Risk Evolution */}
             <div className="bg-bg-surface rounded-lg border border-bg-border p-4">
               <div className="text-xs uppercase tracking-widest text-text-muted mb-3">
@@ -404,6 +413,9 @@ export default function WellMonitor() {
               </ResponsiveContainer>
             </div>
           </div>
+
+          {/* ═══════════ SENSOR READINGS ═══════════ */}
+          <FeatureReadings windowFeatures={current.window_features} />
         </div>
       )}
 

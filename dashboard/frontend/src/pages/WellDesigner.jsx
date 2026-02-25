@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
   Tooltip as RTooltip, AreaChart, Area,
 } from 'recharts';
 import { postDesignWell } from '../utils/api';
 import { CHART_COLORS, COLORS, getCfiColor } from '../utils/colors';
+import { useUnits } from '../contexts/UnitContext';
+import { convert } from '../utils/units';
 import MetricCard from '../components/MetricCard';
 import RiskTimeline from '../components/RiskTimeline';
 
@@ -34,8 +36,29 @@ export default function WellDesigner() {
   const [prevResult, setPrevResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const { fmt, unitLabel } = useUnits();
 
   const update = (key, value) => setParams(p => ({ ...p, [key]: value }));
+
+  // Convert trajectory WT values to current unit system for chart display
+  const convertedTrajectory = useMemo(() => {
+    if (!result?.trajectory) return [];
+    const wtUnit = unitLabel('wt');
+    return result.trajectory.map(p => ({
+      ...p,
+      actual_wt: convert('wt', p.actual_wt, wtUnit),
+      wt: p.wt != null ? convert('wt', p.wt, wtUnit) : p.wt,
+    }));
+  }, [result, unitLabel]);
+
+  const convertedPrevTrajectory = useMemo(() => {
+    if (!prevResult?.trajectory) return [];
+    const wtUnit = unitLabel('wt');
+    return prevResult.trajectory.map(p => ({
+      ...p,
+      actual_wt: convert('wt', p.actual_wt, wtUnit),
+    }));
+  }, [prevResult, unitLabel]);
 
   const handlePredict = async () => {
     setLoading(true);
@@ -80,7 +103,7 @@ export default function WellDesigner() {
           </select>
         </FormSection>
 
-        {/* Sliders */}
+        {/* Sliders — always send internal units (mm, psi, °F) to backend */}
         <SliderField
           label="Initial Wall Thickness"
           value={params.initial_thickness_mm}
@@ -163,8 +186,8 @@ export default function WellDesigner() {
             <div className="grid grid-cols-3 gap-3">
               <MetricCard
                 label="Estimated RUL"
-                value={result.rul_years}
-                unit="years"
+                value={fmt('rul', result.rul_years * 365.25)}
+                unit={unitLabel('rul')}
                 color={result.rul_years < 5 ? 'red' : result.rul_years < 15 ? 'orange' : 'green'}
               />
               <MetricCard
@@ -189,7 +212,7 @@ export default function WellDesigner() {
                 Wall Thickness Trajectory
               </div>
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={result.trajectory}>
+                <LineChart data={convertedTrajectory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
                   <XAxis
                     dataKey="year"
@@ -201,7 +224,7 @@ export default function WellDesigner() {
                     stroke={CHART_COLORS.axis}
                     tick={{ fontSize: 10 }}
                     domain={['auto', 'auto']}
-                    label={{ value: 'mm', angle: -90, position: 'insideLeft', fontSize: 10, fill: CHART_COLORS.axis }}
+                    label={{ value: unitLabel('wt'), angle: -90, position: 'insideLeft', fontSize: 10, fill: CHART_COLORS.axis }}
                   />
                   <RTooltip
                     contentStyle={{
@@ -214,7 +237,7 @@ export default function WellDesigner() {
                   {/* Ghost line from previous prediction */}
                   {prevResult && (
                     <Line
-                      data={prevResult.trajectory}
+                      data={convertedPrevTrajectory}
                       type="monotone"
                       dataKey="actual_wt"
                       stroke={CHART_COLORS.actual}
@@ -231,7 +254,7 @@ export default function WellDesigner() {
                     stroke={CHART_COLORS.wt}
                     dot={false}
                     strokeWidth={2}
-                    name="Simulated WT"
+                    name={`Simulated WT (${unitLabel('wt')})`}
                   />
                   <Line
                     type="monotone"
@@ -240,7 +263,7 @@ export default function WellDesigner() {
                     dot={false}
                     strokeWidth={1.5}
                     strokeDasharray="5 3"
-                    name="Predicted WT"
+                    name={`Predicted WT (${unitLabel('wt')})`}
                   />
                 </LineChart>
               </ResponsiveContainer>

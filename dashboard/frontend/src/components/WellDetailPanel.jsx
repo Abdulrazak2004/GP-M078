@@ -2,9 +2,11 @@ import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CfiGauge from './CfiGauge';
 import { getCfiColor } from '../utils/colors';
+import { useUnits } from '../contexts/UnitContext';
 
 export default function WellDetailPanel({ well, onClose }) {
   const navigate = useNavigate();
+  const { fmt, unitLabel } = useUnits();
   if (!well) return null;
 
   return (
@@ -30,9 +32,9 @@ export default function WellDetailPanel({ well, onClose }) {
 
       {/* Metrics */}
       <div className="px-4 space-y-3">
-        <MetricRow label="RUL" value={`${Math.round(well.rul).toLocaleString()}`} unit="days" />
-        <MetricRow label="Wall Thickness" value={well.current_wt?.toFixed(1)} unit="mm" />
-        <MetricRow label="Corrosion Rate" value={well.cr?.toFixed(1)} unit="mpy" />
+        <MetricRow label="RUL" value={fmt('rul', well.rul)} unit={unitLabel('rul')} />
+        <MetricRow label="Wall Thickness" value={fmt('wt', well.current_wt)} unit={unitLabel('wt')} />
+        <MetricRow label="Corrosion Rate" value={fmt('cr', well.cr)} unit={unitLabel('cr')} />
         <MetricRow label="Reservoir" value={well.reservoir_type} />
         <MetricRow label="Casing" value={well.casing_grade} />
       </div>
